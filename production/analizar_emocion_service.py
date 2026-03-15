@@ -21,6 +21,7 @@ import threading
 import time
 import numpy as np
 import torch
+import cv2
 from fastapi import FastAPI
 from pydantic import BaseModel
 from collections import deque
@@ -29,7 +30,7 @@ from typing import Optional
 # Resolve paths for training module imports
 _PROD_DIR = os.path.dirname(os.path.abspath(__file__))
 _TRAIN_DIR = os.path.join(_PROD_DIR, "..", "training")
-sys.path.insert(0, _PROD_DIR)
+# _PROD_DIR already on sys.path when uvicorn loads this module from production/
 sys.path.insert(0, _TRAIN_DIR)
 
 from fusion_model import FusionLSTM                              # noqa: E402
@@ -55,6 +56,11 @@ try:
     compatible  = {k: v for k, v in state.items()
                    if k in model_state and v.shape == model_state[k].shape}
     skipped = len(state) - len(compatible)
+    if len(compatible) < 3:
+        raise RuntimeError(
+            f"Checkpoint mismatch: only {len(compatible)}/{len(state)} layers compatible. "
+            "Wrong checkpoint or wrong architecture?"
+        )
     model.load_state_dict(compatible, strict=False)
     model.eval()
     logger.info(f"FusionLSTM loaded: {MODEL_PATH} "
@@ -208,7 +214,6 @@ class EmotionService:
         frame_path = self._get_latest_frame(req.session_id)
         if frame_path and frame_path != self.last_frame_path:
             try:
-                import cv2
                 img = cv2.imread(frame_path)
                 if img is not None:
                     # extract_from_arrays returns (T, 17); T=1 here
