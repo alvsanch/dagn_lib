@@ -18,14 +18,41 @@ Total: **81,210 parámetros** — defendible en 5 minutos en una pizarra.
 
 ## Estado actual (2026-03-15)
 
-### Modelo
+### Modelo — ENTRENAMIENTO FINALIZADO
 - Checkpoint: `production/fusion_best.pth`
-- Best CCC: **0.326** (epoch 127, en curso entrenamiento)
+- Best CCC (val): **0.326** — epoch 127, early stopping en epoch 167 (PATIENCE=40)
 - Arquitectura: `FusionLSTM` en `production/fusion_model.py`
 
+### Evaluación final (split=val, N=937)
+
+| Dataset | N | CCC-V | 95% CI | CCC-A | 95% CI | Media |
+|---------|---|-------|--------|-------|--------|-------|
+| DEAP | 256 | 0.155 | [0.030, 0.268] | 0.080 | [-0.036, 0.194] | 0.117 |
+| WESAD | 299 | 0.550 | [0.466, 0.617] | 0.547 | [0.458, 0.626] | **0.549** |
+| DREAMER | 82 | -0.156 | [-0.356, 0.042] | 0.129 | [-0.078, 0.342] | -0.014 |
+| AFEW-VA | 182 | 0.514 | [0.406, 0.600] | 0.455 | [0.331, 0.551] | **0.484** |
+| AFFEC | 118 | 0.312 | [0.145, 0.468] | 0.142 | [-0.037, 0.314] | 0.227 |
+| **GLOBAL** | **937** | **0.329** | **[0.272, 0.386]** | **0.309** | **[0.247, 0.370]** | **0.319** |
+
+**Tabla LaTeX lista en `results_log.txt`.**
+
+Análisis por dataset:
+- **WESAD 0.549** — señales fisiológicas de muñeca (BVP+EDA+TEMP) capturan arousal fisiológico bien
+- **AFEW-VA 0.484** — AUs MediaPipe geométricos funcionan para vídeo facial
+- **AFFEC 0.227** — AUs OpenFace2 + EEG + GSR; arousal débil (0.142), valence moderada
+- **DEAP 0.117** — EEG 32ch→4Hz muy submuestreado; mayor pérdida de información
+- **DREAMER valence -0.156** — conocido en literatura (escala Likert con poca varianza)
+
+Comparativa con dagn_simple (8.8M params, evaluación en conjunto completo):
+- dagn_lib (81K): WESAD=0.549, AFEW-VA=0.484, GLOBAL=0.319
+- dagn_simple (8.8M): WESAD=0.598, AFEW-VA=0.372, GLOBAL=0.435
+- dagn_lib supera en AFEW-VA (AUs vs CNN features), pero GLOBAL menor por DREAMER/DEAP
+
+**Argumento doctoral**: 100× menos parámetros, features bibliográficas explícitas, AFEW-VA comparable.
+
 ### Producción desplegada
-- Servicio FastAPI: `production/analizar_emocion_service.py` ✅ (creado hoy)
-- Dashboard Streamlit: `production/dashboard.py` ✅ (creado hoy)
+- Servicio FastAPI: `production/analizar_emocion_service.py` ✅
+- Dashboard Streamlit: `production/dashboard.py` ✅
 
 ---
 

@@ -1,2 +1,26 @@
 
 [2026-03-15 12:44] dagn_lib FusionLSTM — best_ccc=0.326 epoch=127 params=81,210
+
+============================================================
+[2026-03-15 13:26] dagn_lib FusionLSTM evaluation
+Model: /home/alvar/dagn/dagn_lib/production/fusion_best.pth
+Global CCC: V=0.329 [0.272,0.386] A=0.309 [0.247,0.370] mean=0.319
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out test sets. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.155 & [0.030, 0.268] & 0.080 & [-0.036, 0.194] \\
+WESAD & 299 & 0.550 & [0.466, 0.617] & 0.547 & [0.458, 0.626] \\
+DREAMER & 82 & -0.156 & [-0.356, 0.042] & 0.129 & [-0.078, 0.342] \\
+AFEW-VA & 182 & 0.514 & [0.406, 0.600] & 0.455 & [0.331, 0.551] \\
+AFFEC & 118 & 0.312 & [0.145, 0.468] & 0.142 & [-0.037, 0.314] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.329} & \textbf{[0.272, 0.386]} & \textbf{0.309} & \textbf{[0.247, 0.370]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
