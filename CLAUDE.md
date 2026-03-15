@@ -296,11 +296,19 @@ dagn_lib/
 
 ## Próximos pasos
 
-### Opción A — Probar en producción (recomendado)
-1. `mosquitto -v -c /etc/mosquitto/mosquitto.conf`
-2. `uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000`
-3. `streamlit run dashboard.py`
-4. Conectar ESP32 → verificar warmup ~30s → VA plane activo
+### Opción A — Lanzar en producción ← SIGUIENTE PASO
+```bash
+# Terminal 1
+mosquitto -v -c /etc/mosquitto/mosquitto.conf
+
+# Terminal 2 — desde dagn_lib/production/
+/home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000
+
+# Terminal 3 — desde dagn_lib/production/
+/home/alvar/venv_tesis/bin/python -m streamlit run dashboard.py
+```
+Conectar ESP32 → esperar warmup ~30s → plano VA activo.
+El servicio ya está testado end-to-end (warmup→success sin errores).
 
 ### Opción B — Completar entrenamiento
 - Entrenamiento en curso: best_ccc=0.326 (ep 127)
