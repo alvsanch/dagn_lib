@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Model checkpoints (large files)
+*.pth
+*.pt
+*.ckpt
+*.h5
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and outputs (keep results_log.txt)
+*.log
+/tmp/
+
+# Dataset caches (stored outside repo)
+*.npy
+*.npz
+*.mat
+*.bdf
+
+# Extracted features (stored in ~/datasets/)
+afew_va_au_features/
+affec_features/

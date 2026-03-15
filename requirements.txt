@@ -1,0 +1,30 @@
+# dagn_lib requirements
+# Install into venv_tesis:
+#   /home/alvar/venv_tesis/bin/pip install -r requirements.txt
+
+# Core ML
+torch>=2.2.0
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Physiological signal processing
+neurokit2>=0.2.7          # already installed in venv_tesis
+
+# EEG feature extraction
+mne>=1.6.0                # pip install mne
+
+# Facial Action Units — MediaPipe FaceMesh (geometric AU approximations)
+# py-feat is incompatible with Python 3.12 (nltools requires numpy<1.24)
+# MediaPipe already installed in venv_tesis, no additional install needed
+# mediapipe>=0.10.0   # already present
+
+# Data loading
+pandas>=2.0.0
+Pillow>=10.0.0
+opencv-python>=4.9.0      # already installed in venv_tesis
+
+# Optional: faster data loading
+# h5py>=3.9.0
+
+# Install command:
+# /home/alvar/venv_tesis/bin/pip install mne "py-feat>=0.5.0"

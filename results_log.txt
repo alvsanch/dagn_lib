@@ -1,0 +1,2 @@
+
+[2026-03-15 12:44] dagn_lib FusionLSTM — best_ccc=0.326 epoch=127 params=81,210
