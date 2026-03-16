@@ -166,8 +166,10 @@ def _process_temp(temp, sfreq, T):
 
     n = len(temp)
     chunk = max(1, n // T)
-    temp_T = np.array([temp[i * chunk: (i + 1) * chunk].mean()
-                       for i in range(T)], dtype=np.float32)
+    temp_T = np.array([
+        temp[i * chunk: (i + 1) * chunk].mean() if len(temp[i * chunk: (i + 1) * chunk]) > 0 else 0.0
+        for i in range(T)
+    ], dtype=np.float32)
 
     # Normalize: skin temp ~30-38°C, center at 34, scale by 4
     temp_T = (temp_T - 34.0) / 4.0

@@ -11,7 +11,7 @@ Output:
     ../results_log.txt              — training summary appended after run
 
 Usage:
-    cd /home/alvar/dagn/dagn_lib/training
+    cd /home/alvar/dagn_lib/training
     /home/alvar/venv_tesis/bin/python -u train_fusion.py
 """
 import sys

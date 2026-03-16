@@ -15,7 +15,7 @@ Re-running is safe: clips with existing .npy files are skipped.
 Output directory: ~/datasets/afew_va_au_features/
 
 Usage:
-    cd /home/alvar/dagn/dagn_lib/training
+    cd /home/alvar/dagn_lib/training
     /home/alvar/venv_tesis/bin/python extract_afew_au_features.py
 
 Note on runtime:

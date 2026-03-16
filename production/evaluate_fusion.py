@@ -10,8 +10,8 @@ Generates a LaTeX table for direct use in the thesis.
 Results appended to ../results_log.txt
 
 Usage:
-    cd /home/alvar/dagn
-    /home/alvar/venv_tesis/bin/python dagn_lib/production/evaluate_fusion.py
+    cd /home/alvar/dagn_lib
+    /home/alvar/venv_tesis/bin/python production/evaluate_fusion.py
 """
 import sys
 import datetime

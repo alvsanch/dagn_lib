@@ -25,7 +25,12 @@ import cv2
 from fastapi import FastAPI
 from pydantic import BaseModel
 from collections import deque
-from typing import Optional
+from typing import Optional, List, Tuple
+from scipy.signal import butter, filtfilt, welch
+
+_FACE_CASCADE = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
 
 # Resolve paths for training module imports
 _PROD_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -77,23 +82,37 @@ app = FastAPI(title="DAGN-lib Emotion Service")
 
 class AnalyzeRequest(BaseModel):
     session_id: str
-    ir:   float              # raw IR value from ESP32 (BVP proxy at ~50 Hz)
-    gsr:  float              # raw GSR (μS)
-    temp: float              # skin temperature (°C)
+    # Batches: ALL new physio samples since last call (50 Hz from ESP32)
+    # When present, replace the single-value fields below for HRV/EDA/SpO2.
+    ir_batch:   List[float] = []   # IR (BVP proxy) samples
+    red_batch:  List[float] = []   # RED samples (SpO2)
+    gsr_batch:  List[float] = []   # GSR (EDA) samples
+    temp_batch: List[float] = []   # skin temperature samples
+    # Latest single values (always present, used for display)
+    ir:   float = 0.0
+    red:  float = 0.0
+    gsr:  float = 0.0
+    temp: float = 0.0
     att:  float = 0.0        # NeuroSky Attention 0-100
     med:  float = 0.0        # NeuroSky Meditation 0-100
 
 
 class AnalyzeResponse(BaseModel):
-    status:   str            # "success" | "warming_up" | "error"
-    valence:  float = 0.0
-    arousal:  float = 0.0
-    grad_v:   float = 0.0
-    grad_a:   float = 0.0
-    hr_bpm:   float = 0.0   # mean HR in BPM (from NeuroKit2, 0 if insufficient data)
-    rmssd:    float = 0.0   # RMSSD in ms (0 if insufficient data)
-    eda_mean: float = 0.0   # EDA tonic (z-scored, 0 if no EDA)
-    warmup:   float = 0.0   # 0..1 buffer fill fraction
+    status:     str           # "success" | "warming_up" | "error"
+    valence:    float = 0.0
+    arousal:    float = 0.0
+    grad_v:     float = 0.0
+    grad_a:     float = 0.0
+    face_v:     float = 0.0   # valence from face-only (physio+EEG zeroed)
+    face_a:     float = 0.0   # arousal from face-only
+    hr_bpm:     float = 0.0   # sensor HR from BVP peaks (NeuroKit2)
+    rmssd:      float = 0.0   # RMSSD ms (0 if insufficient data)
+    eda_mean:   float = 0.0   # EDA tonic z-scored
+    spo2:       float = 0.0   # SpO2 % estimated from IR/RED ratio
+    cam_hr:     float = 0.0   # HR from camera rPPG (BPM)
+    cam_resp:   float = 0.0   # respiration rate from camera rPPG (breaths/min)
+    blink_rate: float = 0.0   # blinks per minute (from AU43)
+    warmup:     float = 0.0   # 0..1 buffer fill fraction
 
 
 # ─── Service ──────────────────────────────────────────────────────────────────
@@ -130,6 +149,29 @@ class EmotionService:
 
         # Call-rate tracking for dynamic sfreq estimation
         self._call_times = deque(maxlen=20)
+
+        # True physio sampling rate — ESP32 publishes at 50 Hz (fixed)
+        self._physio_sfreq   = 50.0   # do not estimate dynamically
+
+        # EMA smoothing for fusion VA output (avoids tanh saturation jumps)
+        self._va_ema         = np.zeros(2, dtype=np.float32)
+        self._ema_init       = False
+        self.EMA_ALPHA       = 0.25   # 0=frozen, 1=no smoothing
+
+        # SpO2: rolling RED channel buffer (parallel to bvp_deque for IR)
+        self.red_deque       = deque(maxlen=1500)
+
+        # rPPG: green channel from forehead ROI for camera HR and resp rate
+        self.rppg_green      = deque(maxlen=1800)   # ~60s at camera fps
+        self.rppg_ts         = deque(maxlen=1800)   # per-frame file mtimes
+        self._last_rppg_file = None                  # last processed frame path
+
+        # Blinks: AU43 at camera frame rate (more reliable than 1 Hz service calls)
+        self.ear_hires       = deque(maxlen=600)    # ~2 min at 5fps
+        self.ear_hires_ts    = deque(maxlen=600)
+
+        # Session tracking: reset buffers when session_id changes
+        self._current_session = None
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -176,13 +218,16 @@ class EmotionService:
         """
         Run NeuroKit2 physio feature extraction on current rolling buffers.
         Returns (T, 6) array; zeros where data is insufficient.
+        Cap input to 15 s of data to bound NeuroKit2 processing time.
         """
-        bvp_arr  = np.array(self.bvp_deque,  dtype=np.float32)
-        eda_arr  = np.array(self.eda_deque,  dtype=np.float32)
-        temp_arr = np.array(self.temp_deque, dtype=np.float32)
+        max_samples = int(sfreq * 15)   # 15 s cap → ~750 samples at 50 Hz
 
-        min_bvp = max(5, int(sfreq * 5))   # at least 5 seconds for HRV
-        min_eda = max(2, int(sfreq * 2))   # at least 2 seconds for EDA decomp
+        bvp_arr  = np.array(list(self.bvp_deque) [-max_samples:], dtype=np.float32)
+        eda_arr  = np.array(list(self.eda_deque) [-max_samples:], dtype=np.float32)
+        temp_arr = np.array(list(self.temp_deque)[-max_samples:], dtype=np.float32)
+
+        min_bvp = max(5, int(sfreq * 5))   # at least 5 s for HRV
+        min_eda = max(2, int(sfreq * 2))   # at least 2 s for EDA decomp
 
         return extract_physio_features(
             bvp=bvp_arr  if len(bvp_arr)  >= min_bvp else None,
@@ -194,6 +239,120 @@ class EmotionService:
             T=T,
         )
 
+    # ── camera metrics helpers ─────────────────────────────────────────────────
+
+    def _forehead_green(self, img: np.ndarray) -> Optional[float]:
+        """Mean green channel of forehead ROI using Haar face detection."""
+        gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = _FACE_CASCADE.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+        if len(faces) == 0:
+            return None
+        # Take largest detected face
+        x, y, w, h = sorted(faces, key=lambda f: f[2] * f[3])[-1]
+        fore_h = max(1, int(h * 0.35))
+        roi    = img[y: y + fore_h, x: x + w]
+        return float(roi[:, :, 1].mean()) if roi.size > 0 else None  # green (BGR)
+
+    def _get_new_frames(self, session_id: str) -> List[Tuple[str, np.ndarray]]:
+        """Return (path, img) for all new camera frames since last rPPG call."""
+        if not session_id:
+            return []
+        session_path = os.path.join(FRAMES_ROOT, session_id)
+        if not os.path.exists(session_path):
+            return []
+        all_files = sorted(glob.glob(os.path.join(session_path, "*.jpg")))
+        if not all_files:
+            return []
+        new_files = (
+            [f for f in all_files if f > self._last_rppg_file]
+            if self._last_rppg_file is not None
+            else all_files
+        )
+        new_files = new_files[-60:]   # cap at 60 frames per service call
+        result: List[Tuple[str, np.ndarray]] = []
+        for fpath in new_files:
+            try:
+                img = cv2.imread(fpath)
+                if img is not None:
+                    result.append((fpath, img))
+            except Exception:
+                pass
+        if result:
+            self._last_rppg_file = result[-1][0]
+        return result
+
+    def _compute_rppg(self) -> Tuple[float, float]:
+        """Return (cam_hr_bpm, cam_resp_bpm) from rPPG green-channel buffer."""
+        if len(self.rppg_green) < 20 or len(self.rppg_ts) < 2:
+            return 0.0, 0.0
+        sig = np.array(self.rppg_green, dtype=np.float32)
+        ts  = np.array(self.rppg_ts,    dtype=np.float64)
+        fps = float(np.clip(1.0 / (np.mean(np.diff(ts)) + 1e-6), 2.0, 60.0))
+        sig -= sig.mean()
+        if sig.std() < 1e-6:
+            return 0.0, 0.0
+        sig /= sig.std()
+        nyq = fps / 2.0
+        cam_hr = cam_resp = 0.0
+        # HR: 0.7–min(3,nyq*0.9) Hz — works at any fps ≥ ~1.6 Hz (Nyquist > 0.8)
+        hr_hi = min(3.0, nyq * 0.9)
+        if nyq > 0.8 and hr_hi > 0.7 and len(sig) >= max(20, int(fps * 4)):
+            try:
+                b, a   = butter(2, [0.7 / nyq, hr_hi / nyq], btype="band")
+                hr_sig = filtfilt(b, a, sig)
+                f, psd = welch(hr_sig, fs=fps, nperseg=min(256, len(hr_sig)))
+                mask   = (f >= 0.7) & (f <= hr_hi)
+                if mask.any():
+                    cam_hr = float(np.clip(f[mask][np.argmax(psd[mask])] * 60.0, 40.0, 180.0))
+            except Exception:
+                pass
+        # Resp: 0.1–0.5 Hz — need ≥10s of frames
+        if nyq > 0.5 and len(sig) >= max(20, int(fps * 10)):
+            try:
+                b, a     = butter(2, [0.1 / nyq, min(0.5 / nyq, 0.99)], btype="band")
+                resp_sig = filtfilt(b, a, sig)
+                f, psd   = welch(resp_sig, fs=fps, nperseg=min(256, len(resp_sig)))
+                mask     = (f >= 0.1) & (f <= 0.5)
+                if mask.any():
+                    cam_resp = float(np.clip(f[mask][np.argmax(psd[mask])] * 60.0, 5.0, 30.0))
+            except Exception:
+                pass
+        return cam_hr, cam_resp
+
+    def _compute_blinks(self) -> float:
+        """Blinks per minute from AU43 at camera frame rate (ear_hires)."""
+        if len(self.ear_hires) < 10:
+            return 0.0
+        ear = np.array(list(self.ear_hires), dtype=np.float32)
+        # AU43: 0=open, >0=closing/closed; blink = brief spike above threshold
+        threshold = max(0.25, float(np.percentile(ear, 85)))
+        closed    = ear > threshold
+        blinks    = int(np.sum(np.diff(closed.astype(np.int8)) == 1))
+        if len(self.ear_hires_ts) >= 2:
+            ts = np.array(list(self.ear_hires_ts))
+            window_s = float(ts[-1] - ts[0]) + 1e-6
+        else:
+            window_s = len(self.ear_hires) / 5.0
+        return float(np.clip(blinks / max(window_s, 1.0) * 60.0, 0.0, 60.0))
+
+    def _compute_spo2(self) -> float:
+        """Estimate SpO2 (%) from last 5 s of IR/RED buffers using ratio-of-ratios."""
+        win = int(self._physio_sfreq * 5)   # 5 s window → ~250 samples at 50 Hz
+        if len(self.bvp_deque) < win // 2 or len(self.red_deque) < win // 2:
+            return 0.0
+        ir  = np.array(list(self.bvp_deque) [-win:], dtype=np.float64)
+        red = np.array(list(self.red_deque) [-win:], dtype=np.float64)
+        ir_dc, red_dc = ir.mean(), red.mean()
+        if ir_dc < 1.0 or red_dc < 1.0:
+            return 0.0
+        ir_ac, red_ac = ir.std(), red.std()
+        if red_ac < 1e-6:
+            return 0.0
+        # R = (AC_red/DC_red) / (AC_ir/DC_ir) — Beer-Lambert approximation
+        R    = (red_ac / red_dc) / (ir_ac / ir_dc + 1e-6)
+        spo2 = 110.0 - 25.0 * R
+        return float(np.clip(spo2, 85.0, 100.0))
+
     # ── main handler ──────────────────────────────────────────────────────────
 
     def analyze(self, req: AnalyzeRequest) -> AnalyzeResponse:
@@ -203,12 +362,33 @@ class EmotionService:
     def _analyze_locked(self, req: AnalyzeRequest) -> AnalyzeResponse:
         now = time.monotonic()
         self._call_times.append(now)
-        sfreq = self._estimated_sfreq()
+
+        # 0. Reset buffers on new session
+        if req.session_id != self._current_session:
+            self._current_session = req.session_id
+            self.bvp_deque.clear(); self.red_deque.clear()
+            self.eda_deque.clear(); self.temp_deque.clear()
+            self.rppg_green.clear(); self.rppg_ts.clear()
+            self.ear_hires.clear(); self.ear_hires_ts.clear()
+            self.face_buf.clear(); self.eeg_buf.clear()
+            self._last_rppg_file = None
+            self._ema_init = False
+            logger.info(f"New session: {req.session_id} — buffers reset")
 
         # 1. Extend raw signal buffers
-        self.bvp_deque.append(float(req.ir))
-        self.eda_deque.append(float(req.gsr))
-        self.temp_deque.append(float(req.temp))
+        if req.ir_batch:
+            # Batch path: all 50 Hz samples since last call → true HRV/EDA/SpO2
+            for v in req.ir_batch:   self.bvp_deque.append(float(v))
+            for v in req.red_batch:  self.red_deque.append(float(v))
+            for v in req.gsr_batch:  self.eda_deque.append(float(v))
+            for v in req.temp_batch: self.temp_deque.append(float(v))
+            # sfreq is fixed at ESP32 rate — no dynamic estimation needed
+        else:
+            # Fallback: single value (old behaviour)
+            self.bvp_deque.append(float(req.ir))
+            self.red_deque.append(float(req.red))
+            self.eda_deque.append(float(req.gsr))
+            self.temp_deque.append(float(req.temp))
 
         # 2. Face AUs from latest frame on disk
         frame_path = self._get_latest_frame(req.session_id)
@@ -229,8 +409,8 @@ class EmotionService:
         med = float(req.med) if np.isfinite(req.med) else 0.0
         self.eeg_buf.append(self._eeg_approx(att, med))
 
-        # 4. NeuroKit2 physio features
-        physio_feat = self._compute_physio(sfreq)
+        # 4. NeuroKit2 physio features (use true sensor sfreq, not call sfreq)
+        physio_feat = self._compute_physio(self._physio_sfreq)
 
         # 5. Warmup: wait until face_buf is full
         if len(self.face_buf) < T:
@@ -247,24 +427,60 @@ class EmotionService:
         physio_t = torch.tensor(physio_feat, dtype=torch.float32).unsqueeze(0).to(DEVICE)
         eeg_t    = torch.tensor(eeg_arr,    dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
-        # 7. FusionLSTM forward
+        # 7. FusionLSTM forward — fusion (all modalities)
         with torch.no_grad():
             va, grad = model(face_t, physio_t, eeg_t)
+            # Face-only: zero out physio and EEG to isolate camera contribution
+            va_face, _ = model(face_t,
+                               torch.zeros_like(physio_t),
+                               torch.zeros_like(eeg_t))
 
-        va   = torch.nan_to_num(va)
-        grad = torch.nan_to_num(grad)
+        va      = torch.nan_to_num(va)
+        grad    = torch.nan_to_num(grad)
+        va_face = torch.nan_to_num(va_face)
 
-        valence = float(va[0, -1, 0])
-        arousal = float(va[0, -1, 1])
+        raw_v = float(va[0, -1, 0])
+        raw_a = float(va[0, -1, 1])
         grad_v  = float(grad[0, -1, 0])
         grad_a  = float(grad[0, -1, 1])
+        face_v  = float(va_face[0, -1, 0])
+        face_a  = float(va_face[0, -1, 1])
 
-        # 8. Derived metrics for dashboard display
-        # physio_feat[:, 2] = mean_HR_norm (BPM/100), replicated across T
-        # physio_feat[:, 0] = RMSSD_norm  (ms/100),  replicated across T
-        hr_bpm   = float(physio_feat[0, 2]) * 100.0
+        # EMA smoothing to avoid tanh saturation jumps
+        if not self._ema_init:
+            self._va_ema  = np.array([raw_v, raw_a])
+            self._ema_init = True
+        else:
+            self._va_ema = (self.EMA_ALPHA * np.array([raw_v, raw_a])
+                            + (1 - self.EMA_ALPHA) * self._va_ema)
+        valence, arousal = float(self._va_ema[0]), float(self._va_ema[1])
+
+        # 8. Sensor-derived metrics
+        hr_bpm   = float(physio_feat[0, 2]) * 100.0   # 0 at low sampling rates
         rmssd    = float(physio_feat[0, 0]) * 100.0
         eda_mean = float(physio_feat[:, 3].mean())
+        spo2     = self._compute_spo2()
+
+        # 9. Camera-derived metrics: load new frames for rPPG + blinks
+        new_frames = self._get_new_frames(req.session_id)
+        au_count = 0
+        for fpath, img in new_frames:
+            mtime = os.path.getmtime(fpath)
+            green = self._forehead_green(img)
+            if green is not None:
+                self.rppg_green.append(green)
+                self.rppg_ts.append(mtime)
+            # AU43 for blinks: max 8 MediaPipe calls per service call
+            if au_count < 8:
+                try:
+                    au = self.face_extractor.extract_from_arrays([img], T=1)
+                    self.ear_hires.append(float(au[0][16]))
+                    self.ear_hires_ts.append(mtime)
+                    au_count += 1
+                except Exception:
+                    pass
+        cam_hr, cam_resp = self._compute_rppg()
+        blink_rate       = self._compute_blinks()
 
         return AnalyzeResponse(
             status="success",
@@ -272,9 +488,15 @@ class EmotionService:
             arousal=arousal,
             grad_v=grad_v,
             grad_a=grad_a,
+            face_v=face_v,
+            face_a=face_a,
             hr_bpm=hr_bpm,
             rmssd=rmssd,
             eda_mean=eda_mean,
+            spo2=spo2,
+            cam_hr=cam_hr,
+            cam_resp=cam_resp,
+            blink_rate=blink_rate,
             warmup=1.0,
         )
 

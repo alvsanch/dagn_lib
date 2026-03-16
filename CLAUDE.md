@@ -16,7 +16,7 @@ Total: **81,210 parámetros** — defendible en 5 minutos en una pizarra.
 
 ---
 
-## Estado actual (2026-03-15)
+## Estado actual (2026-03-16)
 
 ### Modelo — ENTRENAMIENTO FINALIZADO
 - Checkpoint: `production/fusion_best.pth`
@@ -196,19 +196,28 @@ Dashboard Streamlit  ──── HTTP POST ──► FastAPI :8000 /analyze
 ```
 
 ### Servicio (`production/analizar_emocion_service.py`)
-- **Request**: `{session_id, ir, gsr, temp, att, med}` — un valor raw por llamada
-- **Buffers internos**: rolling deques; `sfreq` estimada dinámicamente de la tasa de llamadas
-- **Face**: lee frame más reciente de `/mnt/c/biometria_tesis/{session_id}/` → AUs (17D)
-- **Physio**: NeuroKit2 sobre bvp_deque+eda_deque+temp_deque; zeros si < 5s de datos
-- **EEG**: theta/alpha/beta/ratio aproximados desde att/med NeuroSky
-- **Warmup**: necesita T=30 llamadas antes de dar predicciones (~24s a 800ms/refresh)
-- **Response**: `{status, valence, arousal, grad_v, grad_a, hr_bpm, rmssd, eda_mean, warmup}`
+- **Request**: `{session_id, ir, red, gsr, temp, att, med, ir_batch[], red_batch[], gsr_batch[], temp_batch[]}`
+  - `ir_batch` etc: todos los samples MQTT acumulados desde la última llamada (50 Hz real)
+  - Si no hay batch, usa el valor único `ir/gsr/temp` (fallback)
+- **Session reset**: cuando `session_id` cambia, limpia todos los deques y EMA
+- **Physio**: NeuroKit2 sobre bvp_deque (50 Hz, cap 15s), zeros si < 5s
+- **SpO2**: ratio-of-ratios IR/RED últimos 5s → `SpO2 = 110 - 25*R`
+- **rPPG**: green channel forehead ROI → Welch PSD → HR cam (0.7–min(3.0,nyq×0.9) Hz) y resp (0.1–0.5 Hz); requiere `nyq > 0.8`
+- **Blinks**: `ear_hires` buffer a framerate de cámara (máx 8 extracciones AU43/llamada)
+- **EMA smoothing**: alpha=0.25 sobre salida VA cruda (evita saturación tanh)
+- **Face-only forward**: pasa physio/eeg=zeros para obtener `face_v`/`face_a` (indicador solo cámara)
+- **Warmup**: T=30 llamadas antes de predicciones (~30s a 1000ms/refresh)
+- **Response**: `{status, valence, arousal, grad_v, grad_a, face_v, face_a, hr_bpm, rmssd, eda_mean, spo2, cam_hr, cam_resp, blink_rate, warmup}`
 
 ### Dashboard (`production/dashboard.py`)
-- **Sin procesamiento de señal**: ni `find_peaks`, ni SpO2, ni rPPG, ni blinks
-- Acumula MQTT raw → envía último valor al servicio cada 800ms
-- Layout: Cámara | Plano VA (con vector de trayectoria) | Métricas del servicio
-- Gráficas raw: IR · GSR · Attention/Meditation
+- **Batch physio**: acumula MQTT desde `last_physio_ts` → envía `ir_batch[]` al servicio (50 Hz real)
+- **`last_physio_ts`**: se inicializa a `datetime.now()` al START SESSION (evita seed histórico)
+- **Autorefresh**: 1000ms
+- **Layout**: `st.columns([4,1])` — izquierda: cámara+VA plane+gráficas; derecha: métricas fijas
+  - Subcols cámara | plano VA (arriba), VA timeline + raw signals (abajo, sin scroll)
+  - Métricas divididas en secciones **Sensor** y **Camera**
+- **VA plane**: punto naranja "Cam" (face_v/face_a), leyenda en `y=-0.25`
+- **VA timeline**: `key="va_timeline"`, `width=2`, `connectgaps=True`, `range=[-1.05,1.05]`
 
 ### Campos MQTT reales (tesis/biomedidas)
 ```
@@ -233,20 +242,20 @@ Separar con: `df[df["ir"].notna()]` y `df[df["att"].notna()]`.
 mosquitto -v -c /etc/mosquitto/mosquitto.conf
 
 # 2. FastAPI service
-cd /home/alvar/dagn/dagn_lib/production
+cd /home/alvar/dagn_lib/production
 /home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000
 
 # 3. Dashboard
-cd /home/alvar/dagn/dagn_lib/production
+cd /home/alvar/dagn_lib/production
 /home/alvar/venv_tesis/bin/python -m streamlit run dashboard.py
 
 # Entrenamiento (en background)
-cd /home/alvar/dagn/dagn_lib/training
+cd /home/alvar/dagn_lib/training
 /home/alvar/venv_tesis/bin/python -u train_fusion.py > /tmp/train_fusion.log 2>&1 &
 
 # Evaluación
-cd /home/alvar/dagn
-/home/alvar/venv_tesis/bin/python dagn_lib/production/evaluate_fusion.py
+cd /home/alvar/dagn_lib
+/home/alvar/venv_tesis/bin/python production/evaluate_fusion.py
 ```
 
 ---
@@ -291,31 +300,28 @@ dagn_lib/
 | AFEW-VA JSON: está en `clip_dir/{clip_id}.json` | No buscar en el directorio padre |
 | GlobalDataset: cargaba datasets dos veces | Cargar una vez con `_load_defaults` |
 | PyTorch `strict=False`: falla con shape mismatch | Filtrar manualmente: `{k:v for k,v in state.items() if k in model_state and v.shape==model_state[k].shape}` |
+| Dashboard 1.25 Hz → NeuroKit2 no detecta picos | Enviar `ir_batch[]` con todos los samples MQTT desde última llamada (50 Hz real) |
+| `cam_hr` siempre 0 con cámara ~5 fps | Condición `nyq > 0.8` con `hr_hi = min(3.0, nyq*0.9)` en lugar de `nyq > 4.0` |
+| Blinks nunca detectados a 1 Hz servicio | Buffer `ear_hires` a framerate de cámara, máx 8 extracciones AU43/llamada |
+| SpO2 estancado en 83.7 al inicio | Usar solo últimos 5s del deque; reset deque al cambiar `session_id` |
+| Valence desaparece del timeline | `key="va_timeline"`, `width=2`, `connectgaps=True`, `range=[-1.05,1.05]` |
 
 ---
 
-## Próximos pasos
+## Próximos pasos (2026-03-16)
 
-### Opción A — Lanzar en producción ← SIGUIENTE PASO
-```bash
-# Terminal 1
-mosquitto -v -c /etc/mosquitto/mosquitto.conf
+### Estado de producción ✅
+Sistema completamente operativo:
+- Batch physio 50 Hz → NeuroKit2 detecta picos BVP correctamente
+- SpO2, HR cámara, resp, blinks todos funcionando
+- Layout sin scroll: cámara + plano VA arriba, métricas fijas a la derecha
+- VA timeline con Valence visible
 
-# Terminal 2 — desde dagn_lib/production/
-/home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000
+### Opción A — Continuar pruebas en producción
+- Verificar HR sensor con ESP32 conectado (requiere ~15s de datos a 50 Hz)
+- Verificar blink_rate con MediaPipe en tiempo real
 
-# Terminal 3 — desde dagn_lib/production/
-/home/alvar/venv_tesis/bin/python -m streamlit run dashboard.py
-```
-Conectar ESP32 → esperar warmup ~30s → plano VA activo.
-El servicio ya está testado end-to-end (warmup→success sin errores).
-
-### Opción B — Completar entrenamiento
-- Entrenamiento en curso: best_ccc=0.326 (ep 127)
-- Esperar convergencia (PATIENCE=40); WESAD y AFEW-VA ya convergen bien (~0.5)
-- DREAMER valence negativo es esperado (conocido en literatura)
-
-### Opción C — Paper / tesis
+### Opción B — Paper / tesis
 - Tabla de resultados en `results_log.txt`
 - Argumento doctoral: arquitectura mínima + features bibliográficas > arquitectura pesada
 - Comparar dagn_lib (81K) vs dagn_simple (8.8M): misma tarea, 100× menos parámetros

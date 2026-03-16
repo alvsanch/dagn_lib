@@ -15,7 +15,7 @@ Output: ~/datasets/affec_features/{subj}_run-{r}_trial-{t}.npz
 Run ONCE — idempotent (skips existing .npz files).
 
 Usage:
-    cd /home/alvar/dagn/dagn_lib/training
+    cd /home/alvar/dagn_lib/training
     /home/alvar/venv_tesis/bin/python extract_affec_features.py
 """
 import os
