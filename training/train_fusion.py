@@ -140,7 +140,7 @@ def eval_ccc_by_dataset(model, loader):
         face   = face.to(DEVICE)
         physio = physio.to(DEVICE)
         eeg    = eeg.to(DEVICE)
-        va_out, _ = model(face, physio, eeg)   # (B, T, 2)
+        va_out, _ = model(face, physio)         # (B, T, 2) — no EEG
         # Use last timestep — consistent with production and evaluate_fusion.py
         pred_mean = va_out[:, -1, :].cpu().numpy()    # (B, 2)
         va_np     = va.cpu().numpy()
@@ -201,6 +201,7 @@ def train():
           f"train={len(train_ds)}, val={len(val_ds)}")
 
     model = FusionLSTM(hidden_dim=256, num_layers=2, dropout=0.45).to(DEVICE)
+    # EEG not used: face + physio only (TGAM2 incompatible with DEAP/DREAMER multicanal)
     n_params = model.describe()
     print()
 
@@ -231,10 +232,10 @@ def train():
             ds_ids = ds_ids.to(DEVICE)
 
             # Modal dropout augmentation
-            face, physio, eeg = modal_dropout(face, physio, eeg)
+            face, physio, _ = modal_dropout(face, physio, eeg)
 
             optimizer.zero_grad()
-            pred, _ = model(face, physio, eeg)   # (B, T, 2)
+            pred, _ = model(face, physio)   # (B, T, 2) — no EEG
             loss = total_loss(pred, va, ds_ids)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

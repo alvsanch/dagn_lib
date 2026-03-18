@@ -112,7 +112,7 @@ def collect_predictions(model, loader):
         face   = face.to(DEVICE)
         physio = physio.to(DEVICE)
         eeg    = eeg.to(DEVICE)
-        va_out, _ = model(face, physio, eeg)          # (B, T, 2)
+        va_out, _ = model(face, physio)               # (B, T, 2) — no EEG
         pred_last = va_out[:, -1, :].cpu().numpy()    # (B, 2) — last timestep
         preds_list.append(pred_last)
         labels_list.append(va.cpu().numpy())

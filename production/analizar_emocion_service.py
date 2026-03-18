@@ -463,13 +463,12 @@ class EmotionService:
         physio_t = torch.tensor(physio_feat, dtype=torch.float32).unsqueeze(0).to(DEVICE)
         eeg_t    = torch.tensor(eeg_arr,    dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
-        # 8. FusionLSTM forward — fusion (all modalities)
+        # 8. FusionLSTM forward — face + physio only (EEG excluded from model;
+        #    TGAM2 att/med still shown in dashboard but not fed to model)
         with torch.no_grad():
-            va, grad = model(face_t, physio_t, eeg_t)
-            # Face-only: zero out physio and EEG to isolate camera contribution
-            va_face, _ = model(face_t,
-                               torch.zeros_like(physio_t),
-                               torch.zeros_like(eeg_t))
+            va, grad = model(face_t, physio_t)
+            # Face-only: zero out physio to isolate camera contribution
+            va_face, _ = model(face_t, torch.zeros_like(physio_t))
 
         va      = torch.nan_to_num(va)
         grad    = torch.nan_to_num(grad)

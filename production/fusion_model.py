@@ -4,33 +4,32 @@ fusion_model.py — FusionLSTM for dagn_lib
 Architecture (explainable on a whiteboard in 5 minutes):
 
     face   (T, 17) ──┐
-    physio (T,  6) ──┼── LayerNorm ── LSTM(28→256, 2L) ── Linear(256,2) ── tanh → VA (T, 2)
-    eeg    (T,  5) ──┘
+    physio (T,  6) ──┴── LayerNorm ── LSTM(23→256, 2L) ── Linear(256,2) ── tanh → VA (T, 2)
 
     + temporal gradient: grad[t] = VA[t] - VA[t-1]
 
 Input features:
-    face   — 17 Action Units (Ekman 1978 FACS), from py-feat
+    face   — 17 Action Units (Ekman 1978 FACS), MediaPipe FaceMesh
     physio —  6 HRV/EDA/TEMP features (Task Force 1996, Boucsein 2012)
-    eeg    —  5 bandpower/asymmetry features (Davidson 1988, Klimesch 1999)
 
-Total input dim = 28
+EEG not used in this model. The production system uses a 1-channel NeuroSky
+TGAM2 (attention/meditation) which is not comparable to the multi-channel EEG
+in training datasets (DEAP 32ch, DREAMER 14ch). EEG will be integrated in a
+future model trained on TGAM2-compatible features.
+
+Total input dim = 23
 
 Parameter count (hidden_dim=256, num_layers=2):
-    LayerNorm(28):           56
-    LSTM(28→256, L1):   292,864   [4×(28+256)×256 + 2×4×256]
+    LayerNorm(23):           46
+    LSTM(23→256, L1):   287,744   [4×(23+256)×256 + 2×4×256]
     LSTM(256→256, L2):  526,336   [4×(256+256)×256 + 2×4×256]
     Linear(256→2):          514
     ──────────────────────────────
-    Total:              819,770   ≪ 8.8M dagn_simple ✓
-
-Same architecture concept as 81K version — only wider and one extra LSTM layer.
-The contribution is the learned temporal fusion of bibliographically grounded
-features, not the model complexity itself.
+    Total:              814,640   ≪ 8.8M dagn_simple ✓
 
 Usage:
-    model = FusionLSTM()               # default dims (256 hidden, 2 layers)
-    va, grad = model(face, physio, eeg)  # (B,T,2), (B,T,2)
+    model = FusionLSTM()
+    va, grad = model(face, physio)   # (B,T,2), (B,T,2) — no EEG
 """
 import torch
 import torch.nn as nn
@@ -57,7 +56,6 @@ class FusionLSTM(nn.Module):
     Args:
         face_dim:    input face feature dimension (default 17, FACS AUs)
         physio_dim:  input physio feature dimension (default 6)
-        eeg_dim:     input EEG feature dimension (default 5)
         hidden_dim:  LSTM hidden size (default 256)
         num_layers:  number of stacked LSTM layers (default 2)
         dropout:     dropout probability after final LSTM layer (default 0.45)
@@ -67,7 +65,6 @@ class FusionLSTM(nn.Module):
         self,
         face_dim:   int   = FACE_DIM,
         physio_dim: int   = PHYSIO_DIM,
-        eeg_dim:    int   = EEG_DIM,
         hidden_dim: int   = 256,
         num_layers: int   = 2,
         dropout:    float = 0.45,
@@ -76,10 +73,9 @@ class FusionLSTM(nn.Module):
 
         self.face_dim   = face_dim
         self.physio_dim = physio_dim
-        self.eeg_dim    = eeg_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        input_dim = face_dim + physio_dim + eeg_dim
+        input_dim = face_dim + physio_dim
 
         # Input normalization (handles scale differences between modalities)
         self.norm = nn.LayerNorm(input_dim)
@@ -115,14 +111,13 @@ class FusionLSTM(nn.Module):
         nn.init.xavier_uniform_(self.va_head.weight)
         nn.init.zeros_(self.va_head.bias)
 
-    def forward(self, face, physio, eeg):
+    def forward(self, face, physio):
         """
         Forward pass.
 
         Args:
             face:   (B, T, face_dim)   — AU vectors, zeros if no video
             physio: (B, T, physio_dim) — HRV/EDA/TEMP, zeros if no physio
-            eeg:    (B, T, eeg_dim)    — bandpower features, zeros if no EEG
 
         Returns:
             va:   (B, T, 2) — continuous valence/arousal in [-1, 1]
@@ -130,8 +125,8 @@ class FusionLSTM(nn.Module):
                               grad[:,0,:] = 0 (no previous state at t=0)
                               grad[:,t,:] = va[:,t,:] - va[:,t-1,:]  (t>0)
         """
-        # Concatenate all modalities: (B, T, 28)
-        x = torch.cat([face, physio, eeg], dim=-1)
+        # Concatenate face and physio: (B, T, 23)
+        x = torch.cat([face, physio], dim=-1)
 
         # Normalize across feature dimension
         x = self.norm(x)
@@ -158,7 +153,7 @@ class FusionLSTM(nn.Module):
         n = self.count_parameters()
         print(f"FusionLSTM")
         print(f"  Input:  face({self.face_dim}) + physio({self.physio_dim}) "
-              f"+ eeg({self.eeg_dim}) = {self.face_dim+self.physio_dim+self.eeg_dim}")
+              f"= {self.face_dim+self.physio_dim}")
         print(f"  LSTM:   hidden_dim={self.hidden_dim}, layers={self.num_layers}")
         print(f"  Output: VA (2), grad (2)")
         print(f"  Total parameters: {n:,}  ({'✓' if n < 8_800_000 else '✗'} < 8.8M dagn_simple)")
@@ -173,8 +168,7 @@ if __name__ == "__main__":
     B, T = 4, 30
     face   = torch.zeros(B, T, FACE_DIM)
     physio = torch.zeros(B, T, PHYSIO_DIM)
-    eeg    = torch.zeros(B, T, EEG_DIM)
 
-    va, grad = model(face, physio, eeg)
+    va, grad = model(face, physio)
     print(f"\nForward pass OK: va={va.shape}, grad={grad.shape}")
     print(f"VA range: [{va.min():.3f}, {va.max():.3f}]")
