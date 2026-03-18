@@ -36,7 +36,7 @@ from fusion_model   import FusionLSTM
 EPOCHS      = 200
 BATCH_SIZE  = 32
 LR          = 1e-3
-WEIGHT_DECAY= 1e-4
+WEIGHT_DECAY= 3e-4   # increased from 1e-4 to reduce overfitting with larger model
 PATIENCE    = 40     # epochs without val CCC improvement before stopping
 T           = 30     # timesteps per sample
 
@@ -141,8 +141,8 @@ def eval_ccc_by_dataset(model, loader):
         physio = physio.to(DEVICE)
         eeg    = eeg.to(DEVICE)
         va_out, _ = model(face, physio, eeg)   # (B, T, 2)
-        # Use mean prediction across T timesteps
-        pred_mean = va_out.mean(dim=1).cpu().numpy()  # (B, 2)
+        # Use last timestep — consistent with production and evaluate_fusion.py
+        pred_mean = va_out[:, -1, :].cpu().numpy()    # (B, 2)
         va_np     = va.cpu().numpy()
 
         for b in range(len(va_np)):
@@ -200,7 +200,7 @@ def train():
     print(f"Datasets ready in {time.time()-t0:.0f}s | "
           f"train={len(train_ds)}, val={len(val_ds)}")
 
-    model = FusionLSTM().to(DEVICE)
+    model = FusionLSTM(hidden_dim=256, num_layers=2, dropout=0.45).to(DEVICE)
     n_params = model.describe()
     print()
 

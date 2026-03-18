@@ -4,7 +4,7 @@ fusion_model.py — FusionLSTM for dagn_lib
 Architecture (explainable on a whiteboard in 5 minutes):
 
     face   (T, 17) ──┐
-    physio (T,  6) ──┼── LayerNorm ── LSTM(28→128) ── Linear(128,2) ── tanh → VA (T, 2)
+    physio (T,  6) ──┼── LayerNorm ── LSTM(28→256, 2L) ── Linear(256,2) ── tanh → VA (T, 2)
     eeg    (T,  5) ──┘
 
     + temporal gradient: grad[t] = VA[t] - VA[t-1]
@@ -16,18 +16,20 @@ Input features:
 
 Total input dim = 28
 
-Parameter count:
-    LayerNorm(28):       56
-    LSTM(28→128, 1L): 79,872   [4×(28+128)×128]
-    Linear(128→2):       258
-    ─────────────────────────
-    Total:            80,186   ≪ 500K ✓
+Parameter count (hidden_dim=256, num_layers=2):
+    LayerNorm(28):           56
+    LSTM(28→256, L1):   292,864   [4×(28+256)×256 + 2×4×256]
+    LSTM(256→256, L2):  526,336   [4×(256+256)×256 + 2×4×256]
+    Linear(256→2):          514
+    ──────────────────────────────
+    Total:              819,770   ≪ 8.8M dagn_simple ✓
 
-The model is intentionally minimal. The contribution is the learned temporal
-fusion of bibliographically grounded features, not the model complexity itself.
+Same architecture concept as 81K version — only wider and one extra LSTM layer.
+The contribution is the learned temporal fusion of bibliographically grounded
+features, not the model complexity itself.
 
 Usage:
-    model = FusionLSTM()               # default dims
+    model = FusionLSTM()               # default dims (256 hidden, 2 layers)
     va, grad = model(face, physio, eeg)  # (B,T,2), (B,T,2)
 """
 import torch
@@ -56,17 +58,19 @@ class FusionLSTM(nn.Module):
         face_dim:    input face feature dimension (default 17, FACS AUs)
         physio_dim:  input physio feature dimension (default 6)
         eeg_dim:     input EEG feature dimension (default 5)
-        hidden_dim:  LSTM hidden size (default 128)
-        dropout:     dropout probability after LSTM (default 0.3)
+        hidden_dim:  LSTM hidden size (default 256)
+        num_layers:  number of stacked LSTM layers (default 2)
+        dropout:     dropout probability after final LSTM layer (default 0.45)
     """
 
     def __init__(
         self,
-        face_dim:   int = FACE_DIM,
-        physio_dim: int = PHYSIO_DIM,
-        eeg_dim:    int = EEG_DIM,
-        hidden_dim: int = 128,
-        dropout:    float = 0.3,
+        face_dim:   int   = FACE_DIM,
+        physio_dim: int   = PHYSIO_DIM,
+        eeg_dim:    int   = EEG_DIM,
+        hidden_dim: int   = 256,
+        num_layers: int   = 2,
+        dropout:    float = 0.45,
     ):
         super().__init__()
 
@@ -74,18 +78,21 @@ class FusionLSTM(nn.Module):
         self.physio_dim = physio_dim
         self.eeg_dim    = eeg_dim
         self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
         input_dim = face_dim + physio_dim + eeg_dim
 
         # Input normalization (handles scale differences between modalities)
         self.norm = nn.LayerNorm(input_dim)
 
-        # Core: single-layer LSTM learning temporal multimodal dynamics
+        # Core: stacked LSTM learning temporal multimodal dynamics
+        # inter_dropout applied between layers (0 for single-layer case)
+        inter_dropout = 0.2 if num_layers > 1 else 0.0
         self.lstm = nn.LSTM(
             input_size=input_dim,
             hidden_size=hidden_dim,
-            num_layers=1,
+            num_layers=num_layers,
             batch_first=True,
-            dropout=0.0,  # single layer, no inter-layer dropout
+            dropout=inter_dropout,
         )
 
         self.dropout = nn.Dropout(p=dropout)
@@ -152,9 +159,9 @@ class FusionLSTM(nn.Module):
         print(f"FusionLSTM")
         print(f"  Input:  face({self.face_dim}) + physio({self.physio_dim}) "
               f"+ eeg({self.eeg_dim}) = {self.face_dim+self.physio_dim+self.eeg_dim}")
-        print(f"  LSTM:   hidden_dim={self.hidden_dim}, layers=1")
+        print(f"  LSTM:   hidden_dim={self.hidden_dim}, layers={self.num_layers}")
         print(f"  Output: VA (2), grad (2)")
-        print(f"  Total parameters: {n:,}  ({'✓' if n < 500_000 else '✗'} < 500K)")
+        print(f"  Total parameters: {n:,}  ({'✓' if n < 8_800_000 else '✗'} < 8.8M dagn_simple)")
         return n
 
 
