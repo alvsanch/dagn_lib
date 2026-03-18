@@ -36,25 +36,24 @@ from fusion_model   import FusionLSTM
 EPOCHS      = 200
 BATCH_SIZE  = 32
 LR          = 1e-3
-WEIGHT_DECAY= 3e-4
-PATIENCE    = 60     # increased from 40: larger model needs more epochs to converge
+WEIGHT_DECAY= 5e-4   # increased from 3e-4 to reduce train-val gap (was 0.130)
+PATIENCE    = 60
 T           = 30     # timesteps per sample
 
 # Modal dropout probabilities (zero out entire modality per sample)
 P_FACE_DROP   = 0.2
 P_PHYSIO_DROP = 0.2
-P_EEG_DROP    = 0.3
+P_EEG_DROP    = 0.4  # increased from 0.3: EEG is sparse (DEAP/DREAMER only), more dropout helps
 
-# DREAMER excluded from training:
-#   - Likert 1-5 labels → very low variance after z-score → near-zero CCC on train (0.042)
-#   - 14ch Emotiv EPOC consumer EEG → noisy TGAM2 approximation
-#   - Including it adds noise that hurts other datasets
-EXCLUDE_DATASETS = {"DREAMER"}
+# DREAMER re-included with very low quality weight (0.1):
+#   - Excluded → model predicts wrong polarity on DREAMER val (CCC -0.091)
+#   - Low weight prevents it from corrupting other dataset learning
+#   - DREAMER Likert 1-5 has noisy labels — low weight is appropriate
+EXCLUDE_DATASETS = set()   # no datasets excluded
 
-# Quality weights: equal for all included datasets — 1/sqrt(n) balance is sufficient.
-# Aggressive quality weighting caused AFFEC to collapse (underrepresented → CCC < 0).
+# Quality weights per dataset — multiplies 1/sqrt(n) balance weight
 # DATASET_DEAP=0, DATASET_WESAD=1, DATASET_DREAMER=2, DATASET_AFEWVA=3, DATASET_AFFEC=4
-QUALITY_WEIGHTS = {0: 1.0, 1: 1.0, 2: 0.0, 3: 1.0, 4: 1.0}
+QUALITY_WEIGHTS = {0: 1.0, 1: 1.0, 2: 0.1, 3: 1.0, 4: 1.0}
 
 # Variance penalty per dataset (penalise flat predictions)
 VARIANCE_ALPHAS = {0: 0.5, 1: 0.0, 2: 0.0, 3: 0.3, 4: 0.3}

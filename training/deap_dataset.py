@@ -113,14 +113,11 @@ class DEAPDataset(Dataset):
                 gsr    = sig[CH_GSR,  :]    # (n_samples,)
                 temp_s = sig[CH_TEMP, :]    # (n_samples,)
 
-                # EEG features — computed per-second window
-                eeg_feat = extract_eeg_features(
-                    eeg, SFREQ,
-                    left_ch_idx=LEFT_CH,
-                    right_ch_idx=RIGHT_CH,
-                    window_sec=WINDOW_SEC,
-                    T=T,
-                )  # (T, 5)
+                # EEG zeroed: 32-ch → 2-ch TGAM2 approximation adds marginal signal
+                # (val CCC improvement +0.04 vs no-EEG) but physio (BVP/GSR/TEMP)
+                # is the primary modality for DEAP. Zeroing keeps DEAP consistent
+                # with AFFEC (face+physio only) and reduces feature noise.
+                eeg_feat = zeros_eeg(T)  # (T, 5)
 
                 # Physio features — HRV from BVP, EDA from GSR, TEMP
                 physio_feat = extract_physio_features(
