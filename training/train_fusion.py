@@ -36,8 +36,8 @@ from fusion_model   import FusionLSTM
 EPOCHS      = 200
 BATCH_SIZE  = 32
 LR          = 1e-3
-WEIGHT_DECAY= 3e-4   # increased from 1e-4 to reduce overfitting with larger model
-PATIENCE    = 40     # epochs without val CCC improvement before stopping
+WEIGHT_DECAY= 3e-4
+PATIENCE    = 60     # increased from 40: larger model needs more epochs to converge
 T           = 30     # timesteps per sample
 
 # Modal dropout probabilities (zero out entire modality per sample)
@@ -45,9 +45,19 @@ P_FACE_DROP   = 0.2
 P_PHYSIO_DROP = 0.2
 P_EEG_DROP    = 0.3
 
-# Variance penalty per dataset (penalise flat predictions)
+# DREAMER excluded from training:
+#   - Likert 1-5 labels → very low variance after z-score → near-zero CCC on train (0.042)
+#   - 14ch Emotiv EPOC consumer EEG → noisy TGAM2 approximation
+#   - Including it adds noise that hurts other datasets
+EXCLUDE_DATASETS = {"DREAMER"}
+
+# Quality weights per dataset (multiplies 1/sqrt(n) balance weight in sampler)
+# Based on val CCC: WESAD=0.552, AFEW-VA=0.517, AFFEC=0.296, DEAP=0.136, DREAMER=0 (excluded)
 # DATASET_DEAP=0, DATASET_WESAD=1, DATASET_DREAMER=2, DATASET_AFEWVA=3, DATASET_AFFEC=4
-VARIANCE_ALPHAS = {0: 0.5, 1: 0.0, 2: 0.5, 3: 0.3, 4: 0.3}
+QUALITY_WEIGHTS = {0: 0.5, 1: 2.0, 2: 0.0, 3: 2.0, 4: 1.0}
+
+# Variance penalty per dataset (penalise flat predictions)
+VARIANCE_ALPHAS = {0: 0.5, 1: 0.0, 2: 0.0, 3: 0.3, 4: 0.3}
 
 # Paths
 SCRIPT_DIR  = Path(__file__).parent
@@ -195,14 +205,15 @@ def train():
     t0 = time.time()
 
     train_loader, val_loader, train_ds, val_ds = make_dataloaders(
-        batch_size=BATCH_SIZE, seed=42, T=T, num_workers=0
+        batch_size=BATCH_SIZE, seed=42, T=T, num_workers=0,
+        quality_weights=QUALITY_WEIGHTS,
+        exclude_datasets=EXCLUDE_DATASETS,
     )
     print(f"Datasets ready in {time.time()-t0:.0f}s | "
           f"train={len(train_ds)}, val={len(val_ds)}")
 
     model = FusionLSTM(hidden_dim=256, num_layers=2, dropout=0.45).to(DEVICE)
-    # EEG: TGAM2-compatible features from feature_extractor_eeg_tgam2.py
-    # Training: frontal bandpower → att/med → _eeg_approx()  (same as production)
+    # EEG: TGAM2-compatible (frontal bandpower → att/med → _eeg_approx = production-identical)
     n_params = model.describe()
     print()
 

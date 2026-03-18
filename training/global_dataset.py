@@ -103,18 +103,30 @@ class GlobalDataset(Dataset):
               f"from {len(datasets)} datasets")
 
     @staticmethod
-    def _load_defaults(T, seed):
-        """Load all five datasets with default paths."""
+    def _load_defaults(T, seed, exclude=None):
+        """Load all five datasets with default paths.
+
+        Args:
+            exclude: set/list of dataset names to skip loading (e.g. {"DREAMER"}).
+                     Skipped datasets contribute zero samples but keep their ds_id
+                     so DATASET_NAMES indices remain stable.
+        """
+        exclude = set(exclude) if exclude else set()
+
         print("[Global] Loading DEAP...")
-        deap = DEAPDataset(T=T, seed=seed)
+        deap = DEAPDataset(T=T, seed=seed) if "DEAP" not in exclude else None
         print("[Global] Loading WESAD...")
-        wesad = WESADDataset(T=T, seed=seed)
-        print("[Global] Loading DREAMER...")
-        dreamer = DREAMERDataset(T=T, seed=seed)
+        wesad = WESADDataset(T=T, seed=seed) if "WESAD" not in exclude else None
+        if "DREAMER" not in exclude:
+            print("[Global] Loading DREAMER...")
+            dreamer = DREAMERDataset(T=T, seed=seed)
+        else:
+            print("[Global] Skipping DREAMER (excluded)")
+            dreamer = None
         print("[Global] Loading AFEW-VA...")
-        afew = AFEWVADataset(T=T, use_flip=True, seed=seed)
+        afew = AFEWVADataset(T=T, use_flip=True, seed=seed) if "AFEW-VA" not in exclude else None
         print("[Global] Loading AFFEC...")
-        affec = AFFECDataset(T=T, seed=seed)
+        affec = AFFECDataset(T=T, seed=seed) if "AFFEC" not in exclude else None
         return [
             (deap,    "DEAP"),
             (wesad,   "WESAD"),
@@ -192,15 +204,35 @@ class GlobalDataset(Dataset):
         )
 
 
-def make_dataloaders(batch_size=32, seed=42, T=30, num_workers=0):
+def make_dataloaders(
+    batch_size=32,
+    seed=42,
+    T=30,
+    num_workers=0,
+    quality_weights=None,
+    exclude_datasets=None,
+):
     """
-    Build train and validation DataLoaders with dataset-balanced sampling.
+    Build train and validation DataLoaders.
+
+    Sampler weight per sample = quality_weight[ds_id] / sqrt(n_ds)
+        quality_weight: boosts high-signal datasets (WESAD, AFEW-VA),
+                        down-weights low-quality ones (DEAP).
+        1/sqrt(n):      balances dataset size differences.
+
+    Args:
+        quality_weights: dict {ds_id: float} — multiplier per dataset.
+                         Default: uniform (all 1.0).
+        exclude_datasets: set of dataset names to skip (e.g. {"DREAMER"}).
 
     Returns:
         train_loader, val_loader, train_dataset, val_dataset
     """
+    if quality_weights is None:
+        quality_weights = {}   # defaults to 1.0 for all
+
     # Load sub-datasets ONCE (feature extraction is expensive)
-    datasets = GlobalDataset._load_defaults(T=T, seed=seed)
+    datasets = GlobalDataset._load_defaults(T=T, seed=seed, exclude=exclude_datasets)
 
     train_ds = GlobalDataset(datasets=datasets, split="train",
                               normalize_labels=True, seed=seed, T=T)
@@ -210,8 +242,7 @@ def make_dataloaders(batch_size=32, seed=42, T=30, num_workers=0):
     # Copy VA stats from train to val (use training set statistics)
     val_ds.va_stats = train_ds.va_stats
 
-    # Dataset-balanced sampler for training
-    # Weight per sample ∝ 1/sqrt(n_samples_in_its_dataset)
+    # Weighted sampler: quality × balance (1/sqrt(n))
     ds_counts = {}
     for idx in train_ds.indices:
         _, _, _, _, ds_id = train_ds.all_samples[idx]
@@ -220,7 +251,8 @@ def make_dataloaders(batch_size=32, seed=42, T=30, num_workers=0):
     weights = []
     for idx in train_ds.indices:
         _, _, _, _, ds_id = train_ds.all_samples[idx]
-        w = 1.0 / (np.sqrt(ds_counts[ds_id]) + 1e-8)
+        q = quality_weights.get(ds_id, 1.0)
+        w = q / (np.sqrt(ds_counts[ds_id]) + 1e-8)
         weights.append(w)
 
     sampler = torch.utils.data.WeightedRandomSampler(
