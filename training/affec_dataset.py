@@ -73,7 +73,10 @@ class AFFECDataset(Dataset):
                 d = np.load(str(path))
                 face   = d["face"].astype(np.float32)    # (T, 17)
                 physio = d["physio"].astype(np.float32)  # (T, 6)
-                eeg    = d["eeg"].astype(np.float32)     # (T, 5)
+                # EEG zeroed: 63-ch g.tec → 2-ch TGAM2 approximation is unreliable.
+                # TGAM2 frontal electrode indices (ch9, ch13) may not correspond to
+                # F3/F4 in the actual EDF channel order. Face+physio carry AFFEC.
+                eeg    = np.zeros((d["face"].shape[0], 5), dtype=np.float32)
                 va     = d["va"].astype(np.float32)      # (2,)
 
                 # Verify shapes
