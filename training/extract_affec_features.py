@@ -75,6 +75,8 @@ FACE_DIM = len(AU_MAPPING)  # 17
 
 # EEG channels for frontal alpha asymmetry
 # AFFEC 63-ch 10-20 layout: F3=index 9, F4=index 13
+# NOTE: uses TGAM2-compatible extractor for consistency with production
+# If you need to regenerate .npz files, delete ~/datasets/affec_features/ first
 AFFEC_LEFT_FRONTAL  = 9   # F3
 AFFEC_RIGHT_FRONTAL = 13  # F4
 SFREQ_EEG = 256.0
@@ -171,9 +173,9 @@ def extract_physio_features_affec(gsr_df, onset, duration, T):
 
 
 def extract_eeg_features_affec(edf_path, onset, duration, T):
-    """Extract EEG features from AFFEC EDF file (MNE)."""
+    """Extract TGAM2-compatible EEG features from AFFEC EDF file (MNE)."""
     sys.path.insert(0, str(Path(__file__).parent))
-    from feature_extractor_eeg import extract_eeg_features
+    from feature_extractor_eeg_tgam2 import extract_eeg_features_tgam2
 
     try:
         import mne
@@ -186,7 +188,7 @@ def extract_eeg_features_affec(edf_path, onset, duration, T):
         raw.load_data(verbose=False)
         eeg_data = raw.get_data()  # (63, n_samples)
 
-        return extract_eeg_features(
+        return extract_eeg_features_tgam2(
             eeg_data, sfreq,
             left_ch_idx=AFFEC_LEFT_FRONTAL,
             right_ch_idx=AFFEC_RIGHT_FRONTAL,

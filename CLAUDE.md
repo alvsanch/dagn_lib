@@ -117,20 +117,31 @@ Referencias: Task Force ESC/NASPE (1996), Boucsein (2012).
 HRV (cols 0-2): estadísticos de ventana → replicados en los T timesteps.
 EDA y TEMP (cols 3-5): por timestep via mean-pooling.
 
-### eeg (T=30, dim=5) — Bandpower + Asimetría frontal
-Extraídos con **MNE-Python** (`feature_extractor_eeg.py`), fallback numpy.
-Referencias: Davidson (1988), Klimesch (1999).
+### eeg (T=30, dim=5) — TGAM2-compatible (att/med → 5D)
+Extraídos con **`feature_extractor_eeg_tgam2.py`**.
+Mapea multichannel EEG → frontal theta/alpha/beta → att/med (0-100) → 5 features.
+Mismo espacio de features que producción (NeuroSky TGAM2).
+Referencias: Crowley (2010), Klimesch (1999).
 
-| Col | Feature | Descripción |
-|-----|---------|-------------|
-| 0 | theta_log | log(theta 4-8Hz), z-scored |
-| 1 | alpha_log | log(alpha 8-13Hz), z-scored |
-| 2 | beta_log | log(beta 13-30Hz), z-scored |
-| 3 | alpha_asym | (R-L)/(R+L+ε), frontal, Davidson 1988 |
-| 4 | theta_alpha | log(θ/α ratio), Klimesch 1999 |
+| Col | Feature | Fórmula |
+|-----|---------|---------|
+| 0 | theta | log1p((1 - att/100) × 0.5) |
+| 1 | alpha | log1p((med/100) × 0.5) |
+| 2 | beta  | log1p((att/100) × 0.5) |
+| 3 | asym  | 0.0 (TGAM2 mono-frontal) |
+| 4 | ratio | theta - alpha |
 
-En producción (NeuroSky): theta≈log1p((1-att)*0.5), alpha≈log1p(med*0.5),
-beta≈log1p(att*0.5), asym=0.0, ratio=theta-alpha.
+Mapeo att/med desde bandpower frontal:
+- att = clip(β/(α+θ+ε)×50, 0, 100)  — alta beta rel. a alpha+theta → más concentrado
+- med = clip(α/(θ+β+ε)×50, 0, 100)  — alta alpha rel. a theta+beta → más relajado
+
+Canales frontales por dataset:
+- DEAP (32ch): F3=ch2 (izq), F4=ch19 (der)
+- DREAMER (14ch Emotiv EPOC): F3=ch2, F4=ch11
+- AFFEC (63ch g.tec): F3=ch9, F4=ch13
+
+Rango output: [0, log1p(0.5)] ≈ [0, 0.405] — no z-score, bounded como producción.
+`feature_extractor_eeg.py` (bandpower z-scored) queda como referencia; ya no se usa en loaders.
 
 ---
 
@@ -144,11 +155,13 @@ beta≈log1p(att*0.5), asym=0.0, ratio=theta-alpha.
 | AFEW-VA | AUs MediaPipe (pre-extraídos) | 914 | `/mnt/f/source_datasets/Fisiologico/AFEW-VA/` |
 | AFFEC | AUs OpenFace2 + EEG + GSR | 594 | `/home/alvar/datasets/affec_features/` |
 
-### Features pre-extraídas (NO repetir)
+### Features pre-extraídas
 - AFEW-VA AUs: `~/datasets/afew_va_au_features/` — 914 .npy (457 clips + 457 flipped)
-  - Script: `training/extract_afew_au_features.py`
+  - Script: `training/extract_afew_au_features.py` — NO repetir
 - AFFEC: `~/datasets/affec_features/` — 594 .npz
   - Script: `training/extract_affec_features.py`
+  - ⚠️ Re-ejecutar cuando se quiera EEG TGAM2 en AFFEC: `rm ~/datasets/affec_features/*.npz && python extract_affec_features.py`
+  - Las .npz actuales tienen EEG con extractor viejo (bandpower z-scored, no TGAM2)
 
 ### Dataset bias — solución aplicada
 Cada dataset usa escala VA distinta (1-9, 1-5, 0-10).
@@ -159,17 +172,25 @@ Solución: **z-score por sub-dataset** antes de entrenar (`global_dataset.py`).
 
 ## Modelo FusionLSTM
 
+### Versión activa (ENTRENANDO — face+physio, sin EEG)
 ```python
-# production/fusion_model.py
-x = concat(face, physio, eeg)      # (B, T, 28)
-x = LayerNorm(28)(x)               # normaliza escala entre modalidades
-h, _ = LSTM(28→128, layers=1)(x)   # aprende dinámica temporal multimodal
-h = Dropout(0.3)(h)
-va = tanh(Linear(128→2)(h))        # (B, T, 2) valence/arousal ∈ [-1, 1]
+# production/fusion_model.py — hidden_dim=256, num_layers=2
+x = concat(face, physio)           # (B, T, 23)
+x = LayerNorm(23)(x)               # normaliza escala entre modalidades
+h, _ = LSTM(23→256, layers=2)(x)   # aprende dinámica temporal multimodal
+h = Dropout(0.45)(h)
+va = tanh(Linear(256→2)(h))        # (B, T, 2) valence/arousal ∈ [-1, 1]
 grad = diff(va, dim=T)             # gradiente temporal (para producción)
 ```
+**Parámetros**: LayerNorm(46) + LSTM(287744+526336) + Linear(514) = **814,640**
+EEG eliminado: TGAM2 incompatible con DEAP/DREAMER multichannel; ver roadmap.
 
-**Parámetros**: LayerNorm(56) + LSTM(79,872) + Linear(258) = **80,186**
+### Historial de checkpoints
+| Checkpoint | Params | EEG | CCC val | Notas |
+|------------|--------|-----|---------|-------|
+| fusion_best_81k.pth | 81K | sí (mult.) | 0.308 | face+physio+EEG, hidden=128, 1L |
+| fusion_best_820k_eeg.pth | 820K | sí (mult.) | 0.295 | hidden=256, 2L; peor por EEG ruido |
+| fusion_best.pth | 814K | no | ? | **ENTRENANDO** face+physio, hidden=256, 2L |
 
 ---
 
@@ -177,7 +198,7 @@ grad = diff(va, dim=T)             # gradiente temporal (para producción)
 
 ```
 Loss = MSE + (1 - CCC_valence) + (1 - CCC_arousal) + variance_penalty
-Optimizer: AdamW, LR=1e-3, WD=1e-4
+Optimizer: AdamW, LR=1e-3, WD=3e-4 (aumentado de 1e-4 para reducir overfitting)
 Scheduler: CosineAnnealingLR
 Early stopping: PATIENCE=40
 Modal dropout: P_face=0.2, P_physio=0.2, P_eeg=0.3
@@ -298,7 +319,8 @@ dagn_lib/
     ├── global_dataset.py             ← combina los 5 datasets, z-score por dataset
     ├── feature_extractor_face.py     ← MediaPipe AUs (17D)
     ├── feature_extractor_physio.py   ← NeuroKit2 HRV/EDA/TEMP (6D)
-    ├── feature_extractor_eeg.py      ← MNE bandpower + asimetría (5D)
+    ├── feature_extractor_eeg.py      ← MNE bandpower + asimetría (5D) [referencia, no usado en loaders]
+    ├── feature_extractor_eeg_tgam2.py ← TGAM2-compatible: frontal→att/med→5D (producción-identical)
     ├── deap_dataset.py               ← DEAP loader
     ├── wesad_dataset.py              ← WESAD loader
     ├── dreamer_dataset.py            ← DREAMER loader
@@ -346,7 +368,21 @@ Bugs resueltos (2026-03-18):
 - `evaluate_fusion.py` ahora usa último timestep (`va_out[:, -1, :]`) = consistente con producción
 - Split `test` añadido en `GlobalDataset` (50% del val, nunca en gradients)
 - `--split all` genera comparativa train/val/test con diagnóstico de overfitting
-- Resultados actualizados en `CLAUDE.md` y `results_log.txt`
+
+### Adaptación TGAM2 ✅ COMPLETADA (dataset preparado)
+- **`feature_extractor_eeg_tgam2.py`**: frontal theta/alpha/beta → att/med → 5D features
+  - Idéntico a `_eeg_approx()` de producción → sin distribución shift train/inference
+  - `deap_dataset.py` y `dreamer_dataset.py` actualizados para usar TGAM2
+  - `extract_affec_features.py` actualizado (re-ejecutar para regenerar .npz AFFEC)
+- **Roadmap EEG TGAM2** (pendiente):
+  1. Regenerar AFFEC .npz: `rm ~/datasets/affec_features/*.npz && python extract_affec_features.py`
+  2. Evaluar si añadir EEG mejora: restaurar `eeg_dim=5` en FusionLSTM, actualizar forward
+  3. Retrain con face+physio+EEG(TGAM2) y comparar con face+physio
+
+### Entrenamiento 814K face+physio — EN CURSO
+- Monitor: `tail -f /tmp/train_fusion.log`
+- Al finalizar: `python production/evaluate_fusion.py --split all`
+- Actualizar tabla en CLAUDE.md con nuevos CCC
 
 ### Servidor cámara (Windows)
 - Autenticación por token (`CAM_API_TOKEN`)

@@ -30,9 +30,11 @@ try:
 except ImportError:
     loadmat = None
 
-from feature_extractor_eeg import (
-    extract_eeg_features, zeros_eeg,
-    DREAMER_LEFT_FRONTAL, DREAMER_RIGHT_FRONTAL,
+from feature_extractor_eeg_tgam2 import (
+    extract_eeg_features_tgam2 as extract_eeg_features,
+    zeros_eeg_tgam2 as zeros_eeg,
+    DREAMER_LEFT_FRONTAL,
+    DREAMER_RIGHT_FRONTAL,
 )
 from feature_extractor_physio import extract_physio_features, zeros_physio
 from feature_extractor_face import zeros_face
