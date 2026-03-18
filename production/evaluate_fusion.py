@@ -11,9 +11,30 @@ Results appended to ../results_log.txt
 
 Usage:
     cd /home/alvar/dagn_lib
+
+    # Standard validation (default):
     /home/alvar/venv_tesis/bin/python production/evaluate_fusion.py
+
+    # Pseudo test set (first 50% of val, never in training gradients):
+    /home/alvar/venv_tesis/bin/python production/evaluate_fusion.py --split test
+
+    # Train set (to inspect overfitting gap):
+    /home/alvar/venv_tesis/bin/python production/evaluate_fusion.py --split train
+
+    # All three splits sequentially (train / val / test comparison):
+    /home/alvar/venv_tesis/bin/python production/evaluate_fusion.py --split all
+
+Methodology note on the 'test' split
+--------------------------------------
+A clean held-out test set does not exist for this checkpoint because the model
+was early-stopped using the full validation set (val_ratio=0.2, seed=42).
+The 'test' split is the first 50% of each dataset's val indices — samples that
+never received gradient updates but were indirectly used for model selection.
+Metrics on 'test' have a slight upward selection bias relative to truly
+independent data. For a bias-free test set, re-train with a 70/15/15 split.
 """
 import sys
+import argparse
 import datetime
 from pathlib import Path
 
@@ -79,16 +100,21 @@ def compute_metrics(pred, target):
 # ─── Inference ───────────────────────────────────────────────────────────────
 @torch.no_grad()
 def collect_predictions(model, loader):
-    """Run model on all batches, return (preds, labels, ds_ids) arrays."""
+    """Run model on all batches, return (preds, labels, ds_ids) arrays.
+
+    Uses the LAST timestep output (index -1), matching production behaviour in
+    analizar_emocion_service.py where va[0, -1, :] is the inference result.
+    The last timestep has the most temporal context and is the operative output.
+    """
     model.eval()
     preds_list, labels_list, ds_list = [], [], []
     for face, physio, eeg, va, ds_ids in loader:
         face   = face.to(DEVICE)
         physio = physio.to(DEVICE)
         eeg    = eeg.to(DEVICE)
-        va_out, _ = model(face, physio, eeg)       # (B, T, 2)
-        pred_mean = va_out.mean(dim=1).cpu().numpy()   # (B, 2)
-        preds_list.append(pred_mean)
+        va_out, _ = model(face, physio, eeg)          # (B, T, 2)
+        pred_last = va_out[:, -1, :].cpu().numpy()    # (B, 2) — last timestep
+        preds_list.append(pred_last)
         labels_list.append(va.cpu().numpy())
         ds_list.append(ds_ids.cpu().numpy())
     return (np.concatenate(preds_list),
@@ -97,25 +123,34 @@ def collect_predictions(model, loader):
 
 
 # ─── Table formatting ─────────────────────────────────────────────────────────
-def print_results_table(rows):
+def print_results_table(rows, title=""):
     """rows: list of (name, N, ccc_v, v_lo, v_hi, ccc_a, a_lo, a_hi)"""
+    if title:
+        print(f"\n{'─'*70}")
+        print(f"  {title}")
     header = f"{'Dataset':<10} {'N':>5}  {'CCC-V':>22}  {'CCC-A':>22}  {'Mean':>6}"
-    print("-" * len(header))
+    print("─" * len(header))
     print(header)
-    print("-" * len(header))
+    print("─" * len(header))
     for name, N, cv, vl, vh, ca, al, ah in rows:
         mean = (cv + ca) / 2.0
+        marker = " ◄" if name == "GLOBAL" else ""
         print(f"{name:<10} {N:>5}  {cv:.3f} [{vl:.3f}, {vh:.3f}]  "
-              f"{ca:.3f} [{al:.3f}, {ah:.3f}]  {mean:.3f}")
-    print("-" * len(header))
+              f"{ca:.3f} [{al:.3f}, {ah:.3f}]  {mean:.3f}{marker}")
+    print("─" * len(header))
 
 
-def latex_table(rows, model_name="FusionLSTM"):
+def latex_table(rows, model_name="FusionLSTM", split="val"):
     """Generate LaTeX table for thesis."""
+    split_note = {
+        "val":   "held-out validation set",
+        "test":  "pseudo test set (first 50\\% of val, no gradient updates)",
+        "train": "training set",
+    }.get(split, split)
     lines = [
         r"\begin{table}[ht]",
         r"\centering",
-        rf"\caption{{Evaluation of {model_name} on held-out test sets. "
+        rf"\caption{{Evaluation of {model_name} on {split_note}. "
         r"CCC with 95\% bootstrap CI (n=1000).}",
         r"\begin{tabular}{lrcccc}",
         r"\toprule",
@@ -141,51 +176,34 @@ def latex_table(rows, model_name="FusionLSTM"):
     return "\n".join(lines)
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    print(f"Loading model from {MODEL_PATH}")
-    model = FusionLSTM().to(DEVICE)
-    state = torch.load(MODEL_PATH, map_location=DEVICE)
-    # Warm-start compatible load
-    model_state = model.state_dict()
-    compatible  = {k: v for k, v in state.items()
-                   if k in model_state and v.shape == model_state[k].shape}
-    model.load_state_dict(compatible, strict=False)
-    model.eval()
-
-    n_loaded = len(compatible)
-    n_total  = len(model_state)
-    print(f"Loaded {n_loaded}/{n_total} layers\n")
-
-    print("Building evaluation dataset (full dataset, no split)...")
-    # Use full val split for evaluation (consistent with DAGN Simple)
-    val_ds = GlobalDataset(split="val", normalize_labels=True, T=T)
-    loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
-
-    print("Running inference...")
+# ─── Single-split evaluation ──────────────────────────────────────────────────
+def evaluate_split(model, split, shared_datasets=None):
+    """Load, infer and report metrics for one split. Returns (rows, preds, labels, ds_ids)."""
+    ds = GlobalDataset(
+        datasets=shared_datasets,
+        split=split,
+        normalize_labels=True,
+        T=T,
+    )
+    loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     preds, labels, ds_ids = collect_predictions(model, loader)
-    print(f"Total samples: {len(preds)}\n")
 
     rows = []
-    ds_unique = np.unique(ds_ids)
-
-    for ds_id in ds_unique:
+    for ds_id in np.unique(ds_ids):
         mask = ds_ids == ds_id
-        p = preds[mask]
-        l = labels[mask]
+        p, l = preds[mask], labels[mask]
         N = int(mask.sum())
         (cv, vl, vh), (ca, al, ah) = bootstrap_ci(p, l)
         ds_name = DATASET_NAMES[int(ds_id)] if int(ds_id) < len(DATASET_NAMES) else str(ds_id)
         rows.append((ds_name, N, cv, vl, vh, ca, al, ah))
 
-    # Global
     (cv, vl, vh), (ca, al, ah) = bootstrap_ci(preds, labels)
     rows.append(("GLOBAL", len(preds), cv, vl, vh, ca, al, ah))
 
-    # Print table
-    print_results_table(rows)
+    return rows, preds, labels, ds_ids
 
-    # Detailed metrics per dataset
+
+def print_detailed(rows, preds, labels, ds_ids):
     print("\n── Detailed metrics ──────────────────────────────────────────")
     for name, N, cv, vl, vh, ca, al, ah in rows:
         if name == "GLOBAL":
@@ -201,29 +219,91 @@ def main():
         print(f"  Arousal: CCC={ca:.3f}, r={ma['r']:.3f}(p={ma['p']:.3f}), "
               f"RMSE={ma['rmse']:.3f}, MAE={ma['mae']:.3f}, R²={ma['r2']:.3f}")
 
-    # LaTeX table
-    latex = latex_table(rows, model_name="FusionLSTM (dagn\\_lib)")
-    print("\n── LaTeX ─────────────────────────────────────────────────────")
-    print(latex)
 
-    # Append to log
-    ts   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    grow = [r for r in rows if r[0] == "GLOBAL"][0]
-    _, N, gcv, gvl, gvh, gca, gal, gah = grow
-    mean_ccc = (gcv + gca) / 2.0
-
-    log_entry = (
-        f"\n{'='*60}\n"
-        f"[{ts}] dagn_lib FusionLSTM evaluation\n"
-        f"Model: {MODEL_PATH}\n"
-        f"Global CCC: V={gcv:.3f} [{gvl:.3f},{gvh:.3f}] "
-        f"A={gca:.3f} [{gal:.3f},{gah:.3f}] mean={mean_ccc:.3f}\n"
-        f"\n{latex}\n"
-        f"{'='*60}\n"
+# ─── Main ─────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate FusionLSTM")
+    parser.add_argument(
+        "--split",
+        choices=["train", "val", "test", "all"],
+        default="val",
+        help=(
+            "val  = validation set used for early stopping (default, N≈937)\n"
+            "test = pseudo held-out: first 50%% of val per dataset (N≈468)\n"
+            "train = training set — shows overfitting gap\n"
+            "all  = runs train + val + test sequentially for comparison"
+        ),
     )
-    with open(LOG_PATH, "a") as f:
-        f.write(log_entry)
-    print(f"\nResults appended to {LOG_PATH}")
+    args = parser.parse_args()
+
+    print(f"Loading model from {MODEL_PATH}")
+    model = FusionLSTM().to(DEVICE)
+    state = torch.load(MODEL_PATH, map_location=DEVICE)
+    model_state = model.state_dict()
+    compatible  = {k: v for k, v in state.items()
+                   if k in model_state and v.shape == model_state[k].shape}
+    model.load_state_dict(compatible, strict=False)
+    model.eval()
+    print(f"Loaded {len(compatible)}/{len(model_state)} layers\n")
+
+    # Load sub-datasets once (feature extraction is expensive)
+    print("Loading datasets (shared across splits)...")
+    shared = GlobalDataset._load_defaults(T=T, seed=42)
+
+    splits_to_run = ["train", "val", "test"] if args.split == "all" else [args.split]
+
+    all_global_rows = {}   # split → GLOBAL row (for comparison table in --all mode)
+
+    for split in splits_to_run:
+        print(f"\n{'='*60}")
+        print(f"  Split: {split.upper()}")
+        print(f"{'='*60}")
+        rows, preds, labels, ds_ids = evaluate_split(model, split, shared_datasets=shared)
+        print_results_table(rows)
+        print_detailed(rows, preds, labels, ds_ids)
+
+        latex = latex_table(rows, model_name="FusionLSTM (dagn\\_lib)", split=split)
+        print("\n── LaTeX ─────────────────────────────────────────────────────")
+        print(latex)
+
+        global_row = [r for r in rows if r[0] == "GLOBAL"][0]
+        all_global_rows[split] = global_row
+
+        # Append to log
+        ts   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        _, N, gcv, gvl, gvh, gca, gal, gah = global_row
+        mean_ccc = (gcv + gca) / 2.0
+        log_entry = (
+            f"\n{'='*60}\n"
+            f"[{ts}] dagn_lib FusionLSTM evaluation — split={split}\n"
+            f"Model: {MODEL_PATH}\n"
+            f"Prediction: last timestep (t=-1), matching production\n"
+            f"Global CCC: V={gcv:.3f} [{gvl:.3f},{gvh:.3f}] "
+            f"A={gca:.3f} [{gal:.3f},{gah:.3f}] mean={mean_ccc:.3f}\n"
+            f"\n{latex}\n"
+            f"{'='*60}\n"
+        )
+        with open(LOG_PATH, "a") as f:
+            f.write(log_entry)
+        print(f"\nAppended to {LOG_PATH}")
+
+    # Summary comparison when running all splits
+    if args.split == "all" and len(all_global_rows) == 3:
+        print(f"\n{'='*60}")
+        print("  COMPARISON: Train vs Val vs Test (GLOBAL CCC mean)")
+        print(f"{'='*60}")
+        print(f"  {'Split':<6}  {'N':>5}  {'CCC-V':>6}  {'CCC-A':>6}  {'Mean':>6}")
+        print(f"  {'─'*40}")
+        for sp, (_, N, cv, *_, ca, _, _) in all_global_rows.items():
+            print(f"  {sp:<6}  {N:>5}  {cv:>6.3f}  {ca:>6.3f}  {(cv+ca)/2:>6.3f}")
+        tr = all_global_rows.get("train")
+        va = all_global_rows.get("val")
+        if tr and va:
+            gap = ((tr[2] + tr[6]) / 2) - ((va[2] + va[6]) / 2)
+            print(f"\n  Train–Val CCC gap: {gap:+.3f} "
+                  f"({'overfitting' if gap > 0.05 else 'OK — no significant overfit'})")
+        print(f"\n  Note: 'test' is a subset of 'val' — slight upward selection bias.")
+        print(f"  For a bias-free test, re-train with a 70/15/15 split.")
 
 
 if __name__ == "__main__":

@@ -52,7 +52,11 @@ class GlobalDataset(Dataset):
     Args:
         datasets:         list of (Dataset, name, weight) tuples, or None to use defaults
         normalize_labels: apply per-dataset VA z-score (default True)
-        split:            'train' or 'val'
+        split:            'train', 'val', or 'test'
+                          'test' = first 50% of val indices (deterministic, never in
+                          training gradients). Note: model selection (early stopping)
+                          used the full val set, so test metrics have slight indirect
+                          selection bias. True held-out test requires re-training.
         val_ratio:        fraction for validation set (default 0.2)
         seed:             random seed for split (default 42)
         T:                timesteps per sample (default 30)
@@ -120,22 +124,36 @@ class GlobalDataset(Dataset):
         ]
 
     def _split_indices(self, split, val_ratio, seed):
-        """Stratified split: keep 80% train / 20% val within each dataset."""
+        """Stratified split: 80% train / 20% val within each dataset.
+
+        'test' is derived from val: the first 50% of each dataset's val indices
+        (sorted, deterministic). These samples never received gradient updates.
+        See class docstring for the selection-bias caveat.
+        """
         rng = np.random.default_rng(seed)
         # Group sample indices by dataset
         ds_to_idxs = {}
         for global_idx, (_, _, _, _, ds_id) in enumerate(self.all_samples):
             ds_to_idxs.setdefault(ds_id, []).append(global_idx)
 
-        train_idxs, val_idxs = [], []
+        train_idxs, val_idxs, test_idxs = [], [], []
         for ds_id, idxs in ds_to_idxs.items():
             idxs = np.array(idxs)
             rng.shuffle(idxs)
             n_val = max(1, int(len(idxs) * val_ratio))
-            val_idxs.extend(idxs[:n_val].tolist())
+            val_part = idxs[:n_val].tolist()
+            val_idxs.extend(val_part)
             train_idxs.extend(idxs[n_val:].tolist())
+            # test = first half of val (deterministic, no extra randomness)
+            n_test = max(1, len(val_part) // 2)
+            test_idxs.extend(sorted(val_part)[:n_test])
 
-        return train_idxs if split == "train" else val_idxs
+        if split == "train":
+            return train_idxs
+        elif split == "test":
+            return test_idxs
+        else:
+            return val_idxs
 
     def _compute_va_stats(self, seed, val_ratio):
         """Compute mean/std of VA labels per dataset on training split."""

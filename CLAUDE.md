@@ -16,37 +16,52 @@ Total: **81,210 parámetros** — defendible en 5 minutos en una pizarra.
 
 ---
 
-## Estado actual (2026-03-17)
+## Estado actual (2026-03-18)
 
 ### Modelo — ENTRENAMIENTO FINALIZADO
 - Checkpoint: `production/fusion_best.pth`
 - Best CCC (val): **0.326** — epoch 127, early stopping en epoch 167 (PATIENCE=40)
 - Arquitectura: `FusionLSTM` en `production/fusion_model.py`
 
-### Evaluación final (split=val, N=937)
+### Evaluación final — último timestep, consistente con producción
+
+> Método: `va_out[:, -1, :]` (último timestep LSTM = máximo contexto temporal).
+> Evaluación anterior usaba `mean(dim=1)` → 0.319; ahora 0.308 (coherente con producción).
+> Test = primer 50% del val por dataset (nunca en gradients; ligero selection bias indirecto).
 
 | Dataset | N | CCC-V | 95% CI | CCC-A | 95% CI | Media |
 |---------|---|-------|--------|-------|--------|-------|
-| DEAP | 256 | 0.155 | [0.030, 0.268] | 0.080 | [-0.036, 0.194] | 0.117 |
-| WESAD | 299 | 0.550 | [0.466, 0.617] | 0.547 | [0.458, 0.626] | **0.549** |
-| DREAMER | 82 | -0.156 | [-0.356, 0.042] | 0.129 | [-0.078, 0.342] | -0.014 |
-| AFEW-VA | 182 | 0.514 | [0.406, 0.600] | 0.455 | [0.331, 0.551] | **0.484** |
-| AFFEC | 118 | 0.312 | [0.145, 0.468] | 0.142 | [-0.037, 0.314] | 0.227 |
-| **GLOBAL** | **937** | **0.329** | **[0.272, 0.386]** | **0.309** | **[0.247, 0.370]** | **0.319** |
+| DEAP | 256 | 0.150 | [0.026, 0.267] | 0.039 | [-0.084, 0.167] | 0.095 |
+| WESAD | 299 | 0.593 | [0.505, 0.665] | 0.526 | [0.427, 0.618] | **0.560** |
+| DREAMER | 82 | -0.184 | [-0.377, 0.020] | 0.154 | [-0.046, 0.366] | -0.015 |
+| AFEW-VA | 182 | 0.502 | [0.393, 0.585] | 0.473 | [0.351, 0.576] | **0.488** |
+| AFFEC | 118 | 0.330 | [0.158, 0.480] | 0.153 | [-0.020, 0.325] | 0.241 |
+| **VAL GLOBAL** | **937** | **0.326** | **[0.269, 0.388]** | **0.290** | **[0.227, 0.352]** | **0.308** |
+| **TEST GLOBAL** | **468** | **0.299** | **[0.214, 0.375]** | **0.296** | **[0.206, 0.382]** | **0.297** |
 
 **Tabla LaTeX lista en `results_log.txt`.**
 
+#### Comparativa train / val / test (overfitting analysis)
+
+| Split | N | CCC-V | CCC-A | **Mean** |
+|-------|---|-------|-------|---------|
+| train | 3763 | 0.659 | 0.677 | **0.668** |
+| val | 937 | 0.326 | 0.290 | **0.308** |
+| test | 468 | 0.299 | 0.296 | **0.297** |
+
+Gap train–val: +0.382 — overfitting notable pero val≈test confirma generalización estable.
+
 Análisis por dataset:
-- **WESAD 0.549** — señales fisiológicas de muñeca (BVP+EDA+TEMP) capturan arousal fisiológico bien
-- **AFEW-VA 0.484** — AUs MediaPipe geométricos funcionan para vídeo facial
-- **AFFEC 0.227** — AUs OpenFace2 + EEG + GSR; arousal débil (0.142), valence moderada
-- **DEAP 0.117** — EEG 32ch→4Hz muy submuestreado; mayor pérdida de información
-- **DREAMER valence -0.156** — conocido en literatura (escala Likert con poca varianza)
+- **WESAD 0.560** — señales fisiológicas de muñeca (BVP+EDA+TEMP) capturan arousal fisiológico bien
+- **AFEW-VA 0.488** — AUs MediaPipe geométricos funcionan para vídeo facial
+- **AFFEC 0.241** — AUs OpenFace2 + EEG + GSR; arousal débil (0.153), valence moderada
+- **DEAP 0.095** — EEG 32ch→4Hz muy submuestreado; mayor pérdida de información
+- **DREAMER valence -0.184** — conocido en literatura (escala Likert con poca varianza)
 
 Comparativa con dagn_simple (8.8M params, evaluación en conjunto completo):
-- dagn_lib (81K): WESAD=0.549, AFEW-VA=0.484, GLOBAL=0.319
+- dagn_lib (81K): WESAD=0.560, AFEW-VA=0.488, VAL GLOBAL=0.308
 - dagn_simple (8.8M): WESAD=0.598, AFEW-VA=0.372, GLOBAL=0.435
-- dagn_lib supera en AFEW-VA (AUs vs CNN features), pero GLOBAL menor por DREAMER/DEAP
+- dagn_lib supera en AFEW-VA (AUs vs CNN features); GLOBAL menor por DREAMER/DEAP
 
 **Argumento doctoral**: 100× menos parámetros, features bibliográficas explícitas, AFEW-VA comparable.
 
@@ -319,35 +334,22 @@ dagn_lib/
 
 ---
 
-## Próximos pasos (2026-03-17)
+## Próximos pasos (2026-03-18)
 
-### Estado de producción — SESIÓN EN DEPURACIÓN
-Cambios aplicados hoy (2026-03-17):
-- Dashboard usa `st.markdown(<img>)` en lugar de `st.image(url)` para cámara (evita bloqueo render)
-- Proceso Streamlit lanzado con `setsid` + `start_dashboard.sh` (no muere al cerrar shell)
-- Token cámara en `production/.streamlit/secrets.toml` (leído natively por Streamlit)
-- `record_start` ahora llama `stop_camera` antes para evitar 409
-- Error de `record_start` visible en sidebar (ya no falla silenciosamente)
-- MediaPipe eliminado del bucle de frames (paso 4) — solo Haar para rPPG; AU43 reutilizado del paso 2
-- `os.path.getmtime` con try/except OSError → fallback `time.time()` (race condition WSL/NTFS)
-- Gráficas de señales: de 3 columnas → apiladas ancho completo
-- Leyenda VA timeline: movida debajo de la gráfica (ya no se superpone)
-- Logging INFO para face AU updates (nonzero/17, max value)
+### Estado de producción ✅ OPERATIVO
+Bugs resueltos (2026-03-18):
+- `_get_new_frames`: cursor inicializado al último frame en reset de sesión → warmup avanza
+- rPPG cap reducido 60 → 5 frames/llamada (cv2.imread NTFS/WSL ~100ms/frame)
+- `st.plotly_chart(use_container_width=True)` → `width='stretch'` (Streamlit 1.53.1)
 
-### ⚠️ BUG PENDIENTE — Warmup se queda al 3%
-**Síntoma**: warmup muestra 3% (1/30) y no avanza.
-**Diagnóstico**: la primera llamada al servicio completa OK, pero las siguientes timeout (>3s).
-**Causa probable**: `_get_new_frames` con Haar en 30-60 frames acumulados en la primera llamada real
-(con `_last_rppg_file=None` tras reset de sesión + cámara a ~30fps → 60 Haar × ~0.05s = 3s+).
-**A investigar mañana**:
-1. Añadir timing por paso en `_analyze_locked` para identificar cuál paso tarda
-2. Posible fix: en el reset de sesión, inicializar `_last_rppg_file` al último frame existente
-   (igual que `_advance_rppg_cursor` que se consideró antes) para que la primera llamada
-   no procese frames acumulados sino solo los nuevos desde ese momento.
-3. Alternativa: reducir cap de `_get_new_frames` de 60 a 5 frames por llamada
+### Estado de evaluación ✅ ACTUALIZADA
+- `evaluate_fusion.py` ahora usa último timestep (`va_out[:, -1, :]`) = consistente con producción
+- Split `test` añadido en `GlobalDataset` (50% del val, nunca en gradients)
+- `--split all` genera comparativa train/val/test con diagnóstico de overfitting
+- Resultados actualizados en `CLAUDE.md` y `results_log.txt`
 
 ### Servidor cámara (Windows)
-- Nueva versión con autenticación por token (`CAM_API_TOKEN`)
+- Autenticación por token (`CAM_API_TOKEN`)
 - DEBE arrancar con `host='0.0.0.0'` para que WSL conecte vía `172.26.96.1`
 - Token: `3f7a1c2d-8e4b-4f9a-b1c2-d3e4f5a6b7c8` (también en `.streamlit/secrets.toml`)
 
