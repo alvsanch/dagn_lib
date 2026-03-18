@@ -11,6 +11,7 @@ NO signal processing here — NeuroKit2, peak detection, rPPG, blinks, SpO2
 are all handled by analizar_emocion_service.py.
 """
 
+import os
 import streamlit as st
 import requests
 import json
@@ -36,6 +37,12 @@ SERVICE_URL = "http://localhost:8000/analyze"
 FLASK_URL   = f"http://{WINDOWS_IP}:5000"
 MQTT_BROKER = "localhost"
 MQTT_PORT   = 1883
+# Token for the secured Flask camera server
+# Reads from .streamlit/secrets.toml first, then env var
+try:
+    FLASK_TOKEN = st.secrets["CAM_API_TOKEN"]
+except Exception:
+    FLASK_TOKEN = os.environ.get("CAM_API_TOKEN", "")
 
 st_autorefresh(interval=1000, key="refresh")
 
@@ -106,15 +113,27 @@ with st.sidebar:
             st.session_state.last_physio_ts = datetime.now()  # only fresh data
             mqtt_client.publish("tesis/control", "START")
             try:
-                requests.get(f"{FLASK_URL}/record_start",
-                             params={"session_id": sid}, timeout=2)
+                # Stop any previous recording before starting a new one
+                requests.get(f"{FLASK_URL}/stop_camera",
+                             params={"token": FLASK_TOKEN}, timeout=2)
             except Exception:
                 pass
+            try:
+                r = requests.get(f"{FLASK_URL}/record_start",
+                                 params={"session_id": sid, "token": FLASK_TOKEN},
+                                 timeout=2)
+                if r.status_code != 200:
+                    st.session_state["cam_error"] = f"record_start HTTP {r.status_code}: {r.text[:80]}"
+                else:
+                    st.session_state.pop("cam_error", None)
+            except Exception as e:
+                st.session_state["cam_error"] = f"record_start failed: {e}"
     else:
         if st.button("STOP SESSION"):
             mqtt_client.publish("tesis/control", "STOP")
             try:
-                requests.get(f"{FLASK_URL}/record_stop", timeout=2)
+                requests.get(f"{FLASK_URL}/stop_camera",
+                             params={"token": FLASK_TOKEN}, timeout=2)
             except Exception:
                 pass
             st.session_state.running = False
@@ -122,6 +141,8 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Session: `{st.session_state.session_id or '—'}`")
     st.caption(f"Service: `{SERVICE_URL}`")
+    if st.session_state.get("cam_error"):
+        st.error(f"Cam: {st.session_state['cam_error']}")
 
 # ─── Drain MQTT queue ────────────────────────────────────────────────────────
 
@@ -276,7 +297,11 @@ with col_main:
 
     with col_cam:
         st.subheader("Camera")
-        st.image(f"{FLASK_URL}/video_feed", width=320)
+        st.markdown(
+            f'<img src="{FLASK_URL}/video_feed?token={FLASK_TOKEN}" '
+            f'width="320" style="border-radius:4px; display:block;">',
+            unsafe_allow_html=True,
+        )
 
     with col_va:
         st.subheader("Emotional Plane")
@@ -333,7 +358,7 @@ with col_main:
                 legend=dict(orientation="h", y=-0.25, x=0, yanchor="top"),
                 margin=dict(l=30, r=10, t=10, b=70),
             )
-            st.plotly_chart(fig_va, use_container_width=True)
+            st.plotly_chart(fig_va, width='stretch')
             if status == "success":
                 st.caption(
                     f"Fusion — V: **{v:.3f}**  A: **{a:.3f}** &nbsp;&nbsp;|&nbsp;&nbsp;"
@@ -357,71 +382,63 @@ with col_main:
                                    connectgaps=True))
         fig_t.update_layout(
             yaxis=dict(range=[-1.05, 1.05]),
-            height=180,
-            margin=dict(l=30, r=10, t=10, b=30),
-            legend=dict(orientation="h", y=1.15),
+            height=200,
+            margin=dict(l=30, r=10, t=10, b=50),
+            legend=dict(orientation="h", y=-0.25, x=0.5, xanchor="center", yanchor="top"),
         )
-        st.plotly_chart(fig_t, use_container_width=True, key="va_timeline")
+        st.plotly_chart(fig_t, width='stretch', key="va_timeline")
 
-    # ── Raw signal charts ─────────────────────────────────────────────────────
+    # ── Raw signal charts (stacked, full width) ───────────────────────────────
     if df is not None:
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
+        if "ir" in df.columns and df["ir"].notna().any():
             st.subheader("Raw IR (BVP proxy)")
-            if "ir" in df.columns and df["ir"].notna().any():
-                df_ir = df[["timestamp", "ir"]].dropna(subset=["ir"])
-                fig_ir = go.Figure(go.Scatter(
-                    x=df_ir["timestamp"], y=df_ir["ir"],
-                    mode="lines", name="IR", line=dict(color="steelblue"),
-                ))
-                fig_ir.update_layout(
-                    height=180, margin=dict(l=0, r=0, t=10, b=30),
-                    xaxis_title="", yaxis_title="Raw IR",
-                )
-                st.plotly_chart(fig_ir, use_container_width=True)
-            else:
-                st.caption("No IR data yet")
+            df_ir = df[["timestamp", "ir"]].dropna(subset=["ir"])
+            fig_ir = go.Figure(go.Scatter(
+                x=df_ir["timestamp"], y=df_ir["ir"],
+                mode="lines", name="IR", line=dict(color="steelblue"),
+            ))
+            fig_ir.update_layout(
+                height=180, margin=dict(l=40, r=10, t=10, b=30),
+                xaxis_title="", yaxis_title="Raw IR",
+            )
+            st.plotly_chart(fig_ir, width='stretch')
 
-        with c2:
+        if "gsr" in df.columns and df["gsr"].notna().any():
             st.subheader("GSR Signal")
-            if "gsr" in df.columns and df["gsr"].notna().any():
-                df_gsr = df[["timestamp", "gsr"]].dropna(subset=["gsr"])
-                fig_gsr = go.Figure(go.Scatter(
-                    x=df_gsr["timestamp"], y=df_gsr["gsr"],
-                    mode="lines", name="GSR", line=dict(color="seagreen"),
-                ))
-                fig_gsr.update_layout(
-                    height=180, margin=dict(l=0, r=0, t=10, b=30),
-                    xaxis_title="", yaxis_title="GSR (μS)",
-                )
-                st.plotly_chart(fig_gsr, use_container_width=True)
-            else:
-                st.caption("No GSR data yet")
+            df_gsr = df[["timestamp", "gsr"]].dropna(subset=["gsr"])
+            fig_gsr = go.Figure(go.Scatter(
+                x=df_gsr["timestamp"], y=df_gsr["gsr"],
+                mode="lines", name="GSR", line=dict(color="seagreen"),
+            ))
+            fig_gsr.update_layout(
+                height=180, margin=dict(l=40, r=10, t=10, b=30),
+                xaxis_title="", yaxis_title="GSR (μS)",
+            )
+            st.plotly_chart(fig_gsr, width='stretch')
 
-        with c3:
+        has_att = "att" in df.columns and df["att"].notna().any()
+        has_med = "med" in df.columns and df["med"].notna().any()
+        if has_att or has_med:
             st.subheader("Attention / Meditation")
-            has_att = "att" in df.columns and df["att"].notna().any()
-            has_med = "med" in df.columns and df["med"].notna().any()
-            if has_att or has_med:
-                fig_eeg = go.Figure()
-                if has_att:
-                    df_att = df[["timestamp", "att"]].dropna(subset=["att"])
-                    fig_eeg.add_trace(go.Scatter(
-                        x=df_att["timestamp"], y=df_att["att"],
-                        mode="lines", name="Attention", line=dict(color="darkorchid"),
-                    ))
-                if has_med:
-                    df_med = df[["timestamp", "med"]].dropna(subset=["med"])
-                    fig_eeg.add_trace(go.Scatter(
-                        x=df_med["timestamp"], y=df_med["med"],
-                        mode="lines", name="Meditation", line=dict(color="darkorange"),
-                    ))
-                fig_eeg.update_layout(
-                    yaxis=dict(range=[0, 100]),
-                    height=180, margin=dict(l=0, r=0, t=10, b=30),
-                    xaxis_title="", yaxis_title="NeuroSky (0-100)",
-                )
-                st.plotly_chart(fig_eeg, use_container_width=True)
-            else:
-                st.caption("No EEG data yet")
+            fig_eeg = go.Figure()
+            if has_att:
+                df_att = df[["timestamp", "att"]].dropna(subset=["att"])
+                fig_eeg.add_trace(go.Scatter(
+                    x=df_att["timestamp"], y=df_att["att"],
+                    mode="lines", name="Attention", line=dict(color="darkorchid"),
+                ))
+            if has_med:
+                df_med = df[["timestamp", "med"]].dropna(subset=["med"])
+                fig_eeg.add_trace(go.Scatter(
+                    x=df_med["timestamp"], y=df_med["med"],
+                    mode="lines", name="Meditation", line=dict(color="darkorange"),
+                ))
+            fig_eeg.update_layout(
+                yaxis=dict(range=[0, 100]),
+                height=180, margin=dict(l=40, r=10, t=10, b=30),
+                xaxis_title="", yaxis_title="NeuroSky (0-100)",
+                legend=dict(orientation="h", y=-0.25, x=0.5, xanchor="center", yanchor="top"),
+            )
+            st.plotly_chart(fig_eeg, width='stretch')
+        else:
+            st.caption("No EEG data yet")

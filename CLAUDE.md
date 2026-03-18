@@ -16,7 +16,7 @@ Total: **81,210 parámetros** — defendible en 5 minutos en una pizarra.
 
 ---
 
-## Estado actual (2026-03-16)
+## Estado actual (2026-03-17)
 
 ### Modelo — ENTRENAMIENTO FINALIZADO
 - Checkpoint: `production/fusion_best.pth`
@@ -53,6 +53,7 @@ Comparativa con dagn_simple (8.8M params, evaluación en conjunto completo):
 ### Producción desplegada
 - Servicio FastAPI: `production/analizar_emocion_service.py` ✅
 - Dashboard Streamlit: `production/dashboard.py` ✅
+- Script arranque dashboard: `production/start_dashboard.sh` ✅
 
 ---
 
@@ -239,15 +240,19 @@ Separar con: `df[df["ir"].notna()]` y `df[df["att"].notna()]`.
 
 ```bash
 # 1. Mosquitto (permite conexión ESP32)
-mosquitto -v -c /etc/mosquitto/mosquitto.conf
+mosquitto -v -c /etc/mosquitto/mosquitto.conf > /tmp/mosquitto.log 2>&1 &
 
 # 2. FastAPI service
 cd /home/alvar/dagn_lib/production
-/home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000
+/home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app --host 0.0.0.0 --port 8000 > /tmp/service.log 2>&1 &
 
-# 3. Dashboard
-cd /home/alvar/dagn_lib/production
-/home/alvar/venv_tesis/bin/python -m streamlit run dashboard.py
+# 3. Dashboard — USAR SIEMPRE setsid para que no muera al cerrar el shell
+setsid bash /home/alvar/dagn_lib/production/start_dashboard.sh > /tmp/dashboard.log 2>&1 &
+# Token CAM_API_TOKEN viene de production/.streamlit/secrets.toml (ya configurado)
+
+# 4. Servidor cámara (Windows PowerShell)
+# $env:CAM_API_TOKEN = "3f7a1c2d-8e4b-4f9a-b1c2-d3e4f5a6b7c8"
+# python camera_server.py   ← debe arrancar con host='0.0.0.0' para que WSL conecte
 
 # Entrenamiento (en background)
 cd /home/alvar/dagn_lib/training
@@ -302,29 +307,49 @@ dagn_lib/
 | PyTorch `strict=False`: falla con shape mismatch | Filtrar manualmente: `{k:v for k,v in state.items() if k in model_state and v.shape==model_state[k].shape}` |
 | Dashboard 1.25 Hz → NeuroKit2 no detecta picos | Enviar `ir_batch[]` con todos los samples MQTT desde última llamada (50 Hz real) |
 | `cam_hr` siempre 0 con cámara ~5 fps | Condición `nyq > 0.8` con `hr_hi = min(3.0, nyq*0.9)` en lugar de `nyq > 4.0` |
-| Blinks nunca detectados a 1 Hz servicio | Buffer `ear_hires` a framerate de cámara, máx 8 extracciones AU43/llamada |
+| Blinks nunca detectados | `ear_hires` usa AU43 del paso 2 (1 MediaPipe/llamada); Haar para rPPG en el bucle |
 | SpO2 estancado en 83.7 al inicio | Usar solo últimos 5s del deque; reset deque al cambiar `session_id` |
 | Valence desaparece del timeline | `key="va_timeline"`, `width=2`, `connectgaps=True`, `range=[-1.05,1.05]` |
+| `st.image(url)` bloquea render loop | Usar `st.markdown('<img src=...>')` para MJPEG (browser gestiona el stream) |
+| Streamlit muere al cerrar shell Claude | Lanzar con `setsid bash start_dashboard.sh` — crea nueva sesión de proceso |
+| Token CAM_API_TOKEN no llega a procesos hijo | Usar `production/.streamlit/secrets.toml` leído natively por Streamlit |
+| `record_start` falla con 409 al reiniciar sesión | Llamar `stop_camera` antes de `record_start` en START SESSION |
+| `os.path.getmtime` FileNotFoundError en `/mnt/c/` | try/except OSError → fallback `time.time()` (race condition WSL/NTFS) |
+| MediaPipe en bucle frames → 3s+ por llamada | Eliminar MediaPipe del bucle; solo Haar para rPPG; AU43 del paso 2 para blinks |
 
 ---
 
-## Próximos pasos (2026-03-16)
+## Próximos pasos (2026-03-17)
 
-### Estado de producción ✅
-Sistema completamente operativo:
-- Batch physio 50 Hz → NeuroKit2 detecta picos BVP correctamente
-- SpO2, HR cámara, resp, blinks todos funcionando
-- Layout sin scroll: cámara + plano VA arriba, métricas fijas a la derecha
-- VA timeline con Valence visible
+### Estado de producción — SESIÓN EN DEPURACIÓN
+Cambios aplicados hoy (2026-03-17):
+- Dashboard usa `st.markdown(<img>)` en lugar de `st.image(url)` para cámara (evita bloqueo render)
+- Proceso Streamlit lanzado con `setsid` + `start_dashboard.sh` (no muere al cerrar shell)
+- Token cámara en `production/.streamlit/secrets.toml` (leído natively por Streamlit)
+- `record_start` ahora llama `stop_camera` antes para evitar 409
+- Error de `record_start` visible en sidebar (ya no falla silenciosamente)
+- MediaPipe eliminado del bucle de frames (paso 4) — solo Haar para rPPG; AU43 reutilizado del paso 2
+- `os.path.getmtime` con try/except OSError → fallback `time.time()` (race condition WSL/NTFS)
+- Gráficas de señales: de 3 columnas → apiladas ancho completo
+- Leyenda VA timeline: movida debajo de la gráfica (ya no se superpone)
+- Logging INFO para face AU updates (nonzero/17, max value)
 
-### Opción A — Continuar pruebas en producción
-- Verificar HR sensor con ESP32 conectado (requiere ~15s de datos a 50 Hz)
-- Verificar blink_rate con MediaPipe en tiempo real
+### ⚠️ BUG PENDIENTE — Warmup se queda al 3%
+**Síntoma**: warmup muestra 3% (1/30) y no avanza.
+**Diagnóstico**: la primera llamada al servicio completa OK, pero las siguientes timeout (>3s).
+**Causa probable**: `_get_new_frames` con Haar en 30-60 frames acumulados en la primera llamada real
+(con `_last_rppg_file=None` tras reset de sesión + cámara a ~30fps → 60 Haar × ~0.05s = 3s+).
+**A investigar mañana**:
+1. Añadir timing por paso en `_analyze_locked` para identificar cuál paso tarda
+2. Posible fix: en el reset de sesión, inicializar `_last_rppg_file` al último frame existente
+   (igual que `_advance_rppg_cursor` que se consideró antes) para que la primera llamada
+   no procese frames acumulados sino solo los nuevos desde ese momento.
+3. Alternativa: reducir cap de `_get_new_frames` de 60 a 5 frames por llamada
 
-### Opción B — Paper / tesis
-- Tabla de resultados en `results_log.txt`
-- Argumento doctoral: arquitectura mínima + features bibliográficas > arquitectura pesada
-- Comparar dagn_lib (81K) vs dagn_simple (8.8M): misma tarea, 100× menos parámetros
+### Servidor cámara (Windows)
+- Nueva versión con autenticación por token (`CAM_API_TOKEN`)
+- DEBE arrancar con `host='0.0.0.0'` para que WSL conecte vía `172.26.96.1`
+- Token: `3f7a1c2d-8e4b-4f9a-b1c2-d3e4f5a6b7c8` (también en `.streamlit/secrets.toml`)
 
 ---
 

@@ -47,3 +47,5 @@ Thumbs.db
 # Extracted features (stored in ~/datasets/)
 afew_va_au_features/
 affec_features/
+production/.streamlit/secrets.toml
+production/.streamlit/

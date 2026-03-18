@@ -173,6 +173,11 @@ class EmotionService:
         # Session tracking: reset buffers when session_id changes
         self._current_session = None
 
+        # Cached camera metrics — updated every call (before warmup check)
+        self._cam_hr    = 0.0
+        self._cam_resp  = 0.0
+        self._blink_rate = 0.0
+
     # ── helpers ────────────────────────────────────────────────────────────────
 
     def _estimated_sfreq(self):
@@ -263,12 +268,13 @@ class EmotionService:
         all_files = sorted(glob.glob(os.path.join(session_path, "*.jpg")))
         if not all_files:
             return []
-        new_files = (
-            [f for f in all_files if f > self._last_rppg_file]
-            if self._last_rppg_file is not None
-            else all_files
-        )
-        new_files = new_files[-60:]   # cap at 60 frames per service call
+        # On first call for this session, skip existing frames to avoid
+        # processing all accumulated frames at once (would cause 3s+ timeout).
+        if self._last_rppg_file is None:
+            self._last_rppg_file = all_files[-1]
+            return []
+        new_files = [f for f in all_files if f > self._last_rppg_file]
+        new_files = new_files[-5:]    # cap at 5 frames — cv2.imread from NTFS/WSL ~100ms/frame
         result: List[Tuple[str, np.ndarray]] = []
         for fpath in new_files:
             try:
@@ -392,16 +398,21 @@ class EmotionService:
 
         # 2. Face AUs from latest frame on disk
         frame_path = self._get_latest_frame(req.session_id)
-        if frame_path and frame_path != self.last_frame_path:
+        if frame_path is None:
+            logger.warning(f"No camera frames found for session {req.session_id} in {FRAMES_ROOT}")
+        elif frame_path != self.last_frame_path:
             try:
                 img = cv2.imread(frame_path)
                 if img is not None:
-                    # extract_from_arrays returns (T, 17); T=1 here
                     feats = self.face_extractor.extract_from_arrays([img], T=1)
+                    au_nonzero = int(np.count_nonzero(feats[0]))
+                    logger.info(f"Face AUs updated: {os.path.basename(frame_path)} | nonzero={au_nonzero}/17 | max={feats[0].max():.3f}")
                     self._last_au = feats[0]
                     self.last_frame_path = frame_path
+                else:
+                    logger.warning(f"cv2.imread returned None for {frame_path}")
             except Exception as exc:
-                logger.debug(f"Face AU extraction failed: {exc}")
+                logger.warning(f"Face AU extraction failed: {exc}")
         self.face_buf.append(self._last_au.copy())
 
         # 3. EEG approximation from NeuroSky att/med
@@ -409,17 +420,42 @@ class EmotionService:
         med = float(req.med) if np.isfinite(req.med) else 0.0
         self.eeg_buf.append(self._eeg_approx(att, med))
 
-        # 4. NeuroKit2 physio features (use true sensor sfreq, not call sfreq)
+        # 4. Camera frame processing — BEFORE warmup check so _last_rppg_file
+        #    stays current during warmup (avoids 60-frame spike on call 30).
+        #    Only Haar (green channel) per frame — NO MediaPipe here.
+        #    MediaPipe already ran once in step 2; AU43 is reused for blinks.
+        new_frames = self._get_new_frames(req.session_id)
+        for fpath, img in new_frames:
+            try:
+                mtime = os.path.getmtime(fpath)
+            except OSError:
+                mtime = time.time()   # WSL/NTFS race condition fallback
+            green = self._forehead_green(img)   # Haar only — fast
+            if green is not None:
+                self.rppg_green.append(green)
+                self.rppg_ts.append(mtime)
+        # Blinks: use AU43 already extracted in step 2 (1 MediaPipe call per invoke)
+        if self.last_frame_path is not None:
+            try:
+                mtime = os.path.getmtime(self.last_frame_path)
+            except OSError:
+                mtime = time.time()
+            self.ear_hires.append(float(self._last_au[16]))
+            self.ear_hires_ts.append(mtime)
+        self._cam_hr, self._cam_resp = self._compute_rppg()
+        self._blink_rate = self._compute_blinks()
+
+        # 5. NeuroKit2 physio features (use true sensor sfreq, not call sfreq)
         physio_feat = self._compute_physio(self._physio_sfreq)
 
-        # 5. Warmup: wait until face_buf is full
+        # 6. Warmup: wait until face_buf is full
         if len(self.face_buf) < T:
             return AnalyzeResponse(
                 status="warming_up",
                 warmup=len(self.face_buf) / T,
             )
 
-        # 6. Assemble tensors: (1, T, dim)
+        # 7. Assemble tensors: (1, T, dim)
         face_arr   = np.stack(list(self.face_buf))   # (T, 17)
         eeg_arr    = np.stack(list(self.eeg_buf))    # (T, 5)
 
@@ -427,7 +463,7 @@ class EmotionService:
         physio_t = torch.tensor(physio_feat, dtype=torch.float32).unsqueeze(0).to(DEVICE)
         eeg_t    = torch.tensor(eeg_arr,    dtype=torch.float32).unsqueeze(0).to(DEVICE)
 
-        # 7. FusionLSTM forward — fusion (all modalities)
+        # 8. FusionLSTM forward — fusion (all modalities)
         with torch.no_grad():
             va, grad = model(face_t, physio_t, eeg_t)
             # Face-only: zero out physio and EEG to isolate camera contribution
@@ -455,32 +491,11 @@ class EmotionService:
                             + (1 - self.EMA_ALPHA) * self._va_ema)
         valence, arousal = float(self._va_ema[0]), float(self._va_ema[1])
 
-        # 8. Sensor-derived metrics
+        # 9. Sensor-derived metrics
         hr_bpm   = float(physio_feat[0, 2]) * 100.0   # 0 at low sampling rates
         rmssd    = float(physio_feat[0, 0]) * 100.0
         eda_mean = float(physio_feat[:, 3].mean())
         spo2     = self._compute_spo2()
-
-        # 9. Camera-derived metrics: load new frames for rPPG + blinks
-        new_frames = self._get_new_frames(req.session_id)
-        au_count = 0
-        for fpath, img in new_frames:
-            mtime = os.path.getmtime(fpath)
-            green = self._forehead_green(img)
-            if green is not None:
-                self.rppg_green.append(green)
-                self.rppg_ts.append(mtime)
-            # AU43 for blinks: max 8 MediaPipe calls per service call
-            if au_count < 8:
-                try:
-                    au = self.face_extractor.extract_from_arrays([img], T=1)
-                    self.ear_hires.append(float(au[0][16]))
-                    self.ear_hires_ts.append(mtime)
-                    au_count += 1
-                except Exception:
-                    pass
-        cam_hr, cam_resp = self._compute_rppg()
-        blink_rate       = self._compute_blinks()
 
         return AnalyzeResponse(
             status="success",
@@ -494,9 +509,9 @@ class EmotionService:
             rmssd=rmssd,
             eda_mean=eda_mean,
             spo2=spo2,
-            cam_hr=cam_hr,
-            cam_resp=cam_resp,
-            blink_rate=blink_rate,
+            cam_hr=self._cam_hr,
+            cam_resp=self._cam_resp,
+            blink_rate=self._blink_rate,
             warmup=1.0,
         )
 
