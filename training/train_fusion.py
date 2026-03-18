@@ -51,10 +51,10 @@ P_EEG_DROP    = 0.3
 #   - Including it adds noise that hurts other datasets
 EXCLUDE_DATASETS = {"DREAMER"}
 
-# Quality weights per dataset (multiplies 1/sqrt(n) balance weight in sampler)
-# Based on val CCC: WESAD=0.552, AFEW-VA=0.517, AFFEC=0.296, DEAP=0.136, DREAMER=0 (excluded)
+# Quality weights: equal for all included datasets — 1/sqrt(n) balance is sufficient.
+# Aggressive quality weighting caused AFFEC to collapse (underrepresented → CCC < 0).
 # DATASET_DEAP=0, DATASET_WESAD=1, DATASET_DREAMER=2, DATASET_AFEWVA=3, DATASET_AFFEC=4
-QUALITY_WEIGHTS = {0: 0.5, 1: 2.0, 2: 0.0, 3: 2.0, 4: 1.0}
+QUALITY_WEIGHTS = {0: 1.0, 1: 1.0, 2: 0.0, 3: 1.0, 4: 1.0}
 
 # Variance penalty per dataset (penalise flat predictions)
 VARIANCE_ALPHAS = {0: 0.5, 1: 0.0, 2: 0.0, 3: 0.3, 4: 0.3}
