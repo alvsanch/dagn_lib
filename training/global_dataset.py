@@ -27,7 +27,7 @@ from affec_dataset   import AFFECDataset
 # Feature dimensions (must match feature extractors)
 FACE_DIM   = 17   # AU1-AU43 (17 selected AUs)
 PHYSIO_DIM = 6    # HRV(3) + EDA(2) + TEMP(1)
-EEG_DIM    = 10   # theta_avg, alpha_avg, beta_avg, FAA, ratio, theta_L/R, alpha_L/R, beta_L
+EEG_DIM    = 5    # theta, alpha, beta, alpha_asym, theta/alpha
 
 # Dataset indices (used in training for variance penalty, logging, etc.)
 DATASET_DEAP    = 0

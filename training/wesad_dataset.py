@@ -27,7 +27,7 @@ from torch.utils.data import Dataset
 
 from feature_extractor_physio import extract_physio_features, zeros_physio
 from feature_extractor_face import zeros_face
-from feature_extractor_eeg_full import zeros_eeg_full as zeros_eeg
+from feature_extractor_eeg import zeros_eeg
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 WESAD_DIR     = Path(os.path.expanduser("~/datasets/WESAD"))

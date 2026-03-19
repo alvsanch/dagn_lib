@@ -131,13 +131,12 @@ P_EDA_TON  = 3   # EDA tonic SCL     [BO12, DA12]
 P_EDA_PHA  = 4   # EDA phasic SCR    [BO12]
 P_TEMP     = 5   # (°C-34)/4         [GL93]
 
-# eeg (dim 10) — bilateral frontal, log1p scale (feature_extractor_eeg_full.py):
-E_THETA    = 0   # theta_avg = (theta_L+theta_R)/2  [KL99] — inattention/relaxation
-E_ALPHA    = 1   # alpha_avg = (alpha_L+alpha_R)/2  [KL99] — relaxed alertness
-E_BETA     = 2   # beta_avg  = (beta_L+beta_R)/2    [KL99] — attention/cognitive load
-E_ASYM     = 3   # FAA = alpha_R - alpha_L           [DA88] — valence asymmetry (real now!)
-E_RATIO    = 4   # theta_avg - alpha_avg             [KL99] — cognitive load index
-# Bilateral features (indices 5-9): theta_L, theta_R, alpha_L, alpha_R, beta_L
+# eeg (dim 5) — TGAM2-compatible, log1p scale:
+E_THETA    = 0   # log1p((1-att/100)*0.5)   [KL99] — inattention/relaxation
+E_ALPHA    = 1   # log1p((med/100)*0.5)      [KL99] — relaxed alertness
+E_BETA     = 2   # log1p((att/100)*0.5)      [KL99] — attention/cognitive load
+E_ASYM     = 3   # 0.0 (TGAM2 mono-frontal) [DA88]
+E_RATIO    = 4   # theta - alpha             [KL99]
 
 # face (dim 17) — AU indices (from CLAUDE.md):
 F_AU01 = 0;  F_AU02 = 1;  F_AU04 = 2;  F_AU06 = 3;  F_AU07 = 4
