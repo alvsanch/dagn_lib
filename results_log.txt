@@ -479,3 +479,57 @@ AFFEC & 118 & 0.416 & [0.263, 0.565] & 0.361 & [0.201, 0.517] \\
 \end{tabular}
 \end{table}
 ============================================================
+
+[2026-03-19 12:41] dagn_lib FusionLSTM prior=OFF — best_ccc=0.317 epoch=62 params=824,900
+
+============================================================
+[2026-03-19 13:03] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.344 [0.287,0.397] A=0.346 [0.284,0.407] mean=0.345
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.160 & [0.036, 0.277] & 0.082 & [-0.035, 0.196] \\
+WESAD & 299 & 0.488 & [0.385, 0.576] & 0.588 & [0.503, 0.665] \\
+DREAMER & 82 & -0.060 & [-0.154, 0.043] & -0.077 & [-0.137, -0.017] \\
+AFEW-VA & 182 & 0.601 & [0.529, 0.650] & 0.572 & [0.465, 0.654] \\
+AFFEC & 118 & 0.258 & [0.084, 0.424] & 0.294 & [0.129, 0.446] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.344} & \textbf{[0.287, 0.397]} & \textbf{0.346} & \textbf{[0.284, 0.407]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-19 16:00] dagn_lib FusionLSTM prior=OFF — best_ccc=0.335 epoch=96 params=819,770
+
+============================================================
+[2026-03-19 16:21] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.371 [0.320,0.424] A=0.380 [0.326,0.439] mean=0.376
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.171 & [0.049, 0.284] & 0.145 & [0.026, 0.262] \\
+WESAD & 299 & 0.527 & [0.433, 0.611] & 0.540 & [0.448, 0.623] \\
+DREAMER & 82 & 0.010 & [-0.015, 0.043] & -0.016 & [-0.046, 0.015] \\
+AFEW-VA & 182 & 0.536 & [0.434, 0.610] & 0.613 & [0.514, 0.685] \\
+AFFEC & 118 & 0.418 & [0.253, 0.567] & 0.403 & [0.247, 0.555] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.371} & \textbf{[0.320, 0.424]} & \textbf{0.380} & \textbf{[0.326, 0.439]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
