@@ -18,6 +18,7 @@ import sys
 import os
 import time
 import datetime
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -31,29 +32,30 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "production"))
 
 from global_dataset import GlobalDataset, make_dataloaders, DATASET_NAMES
 from fusion_model   import FusionLSTM
+from physiological_prior import PhysiologicalPrior
 
 # ─── Hyperparameters ──────────────────────────────────────────────────────────
 EPOCHS      = 200
 BATCH_SIZE  = 32
 LR          = 1e-3
-WEIGHT_DECAY= 5e-4   # increased from 3e-4 to reduce train-val gap (was 0.130)
+WEIGHT_DECAY= 3e-4   # reverted: 5e-4 was too aggressive, caused AFFEC collapse (0.381→0.105)
 PATIENCE    = 60
 T           = 30     # timesteps per sample
 
 # Modal dropout probabilities (zero out entire modality per sample)
 P_FACE_DROP   = 0.2
 P_PHYSIO_DROP = 0.2
-P_EEG_DROP    = 0.4  # increased from 0.3: EEG is sparse (DEAP/DREAMER only), more dropout helps
+P_EEG_DROP    = 0.3  # reverted from 0.4: DREAMER excluded, less EEG dropout needed
 
-# DREAMER re-included with very low quality weight (0.1):
-#   - Excluded → model predicts wrong polarity on DREAMER val (CCC -0.091)
-#   - Low weight prevents it from corrupting other dataset learning
-#   - DREAMER Likert 1-5 has noisy labels — low weight is appropriate
-EXCLUDE_DATASETS = set()   # no datasets excluded
+# DREAMER excluded: Likert 1-5 near-zero label variance → CCC ~0.001 (pure noise).
+# Re-including at weight=0.1 did NOT improve DREAMER val but collapsed AFFEC 0.381→0.105.
+# Best result (0.355) was with DREAMER excluded.
+EXCLUDE_DATASETS = {"DREAMER"}
 
 # Quality weights per dataset — multiplies 1/sqrt(n) balance weight
 # DATASET_DEAP=0, DATASET_WESAD=1, DATASET_DREAMER=2, DATASET_AFEWVA=3, DATASET_AFFEC=4
-QUALITY_WEIGHTS = {0: 1.0, 1: 1.0, 2: 0.1, 3: 1.0, 4: 1.0}
+# Equal weights (all 1.0): best config achieved val 0.355
+QUALITY_WEIGHTS = {0: 1.0, 1: 1.0, 2: 0.0, 3: 1.0, 4: 1.0}
 
 # Variance penalty per dataset (penalise flat predictions)
 VARIANCE_ALPHAS = {0: 0.5, 1: 0.0, 2: 0.0, 3: 0.3, 4: 0.3}
@@ -197,6 +199,18 @@ def eval_ccc_by_dataset(model, loader):
     return results
 
 
+# ─── CLI args ─────────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Train FusionLSTM")
+parser.add_argument("--use_prior", action="store_true", default=False,
+                    help="Enable physiological prior auxiliary loss")
+parser.add_argument("--lambda_prior", type=float, default=0.10,
+                    help="Prior loss weight (default 0.10)")
+parser.add_argument("--face_only_prior", action="store_true", default=False,
+                    help="Prior uses only face/AU rules (physio_weight=0, eeg_weight=0). "
+                         "Use with --use_prior.")
+args = parser.parse_args()
+
+
 # ─── Training loop ────────────────────────────────────────────────────────────
 def train():
     print(f"Device: {DEVICE}")
@@ -215,6 +229,20 @@ def train():
     # EEG: TGAM2-compatible (frontal bandpower → att/med → _eeg_approx = production-identical)
     n_params = model.describe()
     print()
+
+    prior = None
+    if args.use_prior:
+        p_weight = 0.0 if args.face_only_prior else 1.0
+        e_weight = 0.0 if args.face_only_prior else 0.7
+        prior = PhysiologicalPrior(
+            lambda_prior=args.lambda_prior,
+            physio_weight=p_weight,
+            eeg_weight=e_weight,
+        )
+        mode = "face-only" if args.face_only_prior else "full"
+        print(f"PhysiologicalPrior ENABLED  λ={args.lambda_prior}  mode={mode}")
+    else:
+        print("PhysiologicalPrior DISABLED (baseline)")
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY
@@ -248,6 +276,8 @@ def train():
             optimizer.zero_grad()
             pred, _ = model(face, physio, eeg)   # (B, T, 2)
             loss = total_loss(pred, va, ds_ids)
+            if prior is not None:
+                loss = loss + prior.auxiliary_loss(pred, face, physio, eeg, ds_ids)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -290,13 +320,22 @@ def train():
     print(f"Model saved: {BEST_PATH}")
 
     # Final evaluation log
-    _log_result(best_ccc, best_ep, n_params)
+    _log_result(best_ccc, best_ep, n_params,
+                use_prior=args.use_prior, lambda_prior=args.lambda_prior,
+                face_only=args.face_only_prior)
 
 
-def _log_result(best_ccc, best_ep, n_params):
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    line = (f"\n[{ts}] dagn_lib FusionLSTM — best_ccc={best_ccc:.3f} "
-            f"epoch={best_ep} params={n_params:,}\n")
+def _log_result(best_ccc, best_ep, n_params, use_prior=False, lambda_prior=0.0,
+                face_only=False):
+    ts        = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    if not use_prior:
+        prior_tag = "prior=OFF"
+    elif face_only:
+        prior_tag = f"prior=ON(face-only,λ={lambda_prior})"
+    else:
+        prior_tag = f"prior=ON(full,λ={lambda_prior})"
+    line      = (f"\n[{ts}] dagn_lib FusionLSTM {prior_tag} — best_ccc={best_ccc:.3f} "
+                 f"epoch={best_ep} params={n_params:,}\n")
     with open(LOG_PATH, "a") as f:
         f.write(line)
     print(f"Logged to {LOG_PATH}")

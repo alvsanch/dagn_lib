@@ -99,3 +99,383 @@ AFFEC & 59 & 0.239 & [0.030, 0.461] & 0.155 & [-0.108, 0.396] \\
 \end{tabular}
 \end{table}
 ============================================================
+
+[2026-03-18 07:00] dagn_lib FusionLSTM — best_ccc=0.296 epoch=81 params=819,770
+
+============================================================
+[2026-03-18 07:23] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.284 [0.222,0.341] A=0.307 [0.249,0.370] mean=0.295
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.155 & [0.034, 0.266] & 0.149 & [0.013, 0.262] \\
+WESAD & 299 & 0.468 & [0.367, 0.553] & 0.536 & [0.439, 0.622] \\
+DREAMER & 82 & -0.040 & [-0.229, 0.166] & 0.001 & [-0.203, 0.214] \\
+AFEW-VA & 182 & 0.494 & [0.378, 0.580] & 0.490 & [0.376, 0.590] \\
+AFFEC & 118 & 0.096 & [-0.071, 0.253] & 0.082 & [-0.108, 0.255] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.284} & \textbf{[0.222, 0.341]} & \textbf{0.307} & \textbf{[0.249, 0.370]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-18 07:42] dagn_lib FusionLSTM — best_ccc=0.293 epoch=103 params=814,640
+
+[2026-03-18 08:07] dagn_lib FusionLSTM — best_ccc=0.304 epoch=108 params=819,770
+
+============================================================
+[2026-03-18 08:26] dagn_lib FusionLSTM evaluation — split=train
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.540 [0.516,0.561] A=0.559 [0.536,0.583] mean=0.549
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on training set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 1024 & 0.500 & [0.455, 0.544] & 0.458 & [0.409, 0.503] \\
+WESAD & 1199 & 0.755 & [0.725, 0.779] & 0.793 & [0.768, 0.817] \\
+DREAMER & 332 & 0.039 & [-0.028, 0.107] & 0.046 & [-0.019, 0.109] \\
+AFEW-VA & 732 & 0.617 & [0.582, 0.644] & 0.670 & [0.633, 0.706] \\
+AFFEC & 476 & 0.424 & [0.351, 0.509] & 0.460 & [0.382, 0.535] \\
+\midrule
+\textbf{GLOBAL} & 3763 & \textbf{0.540} & \textbf{[0.516, 0.561]} & \textbf{0.559} & \textbf{[0.536, 0.583]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-18 08:26] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.340 [0.278,0.397] A=0.349 [0.292,0.407] mean=0.344
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.136 & [0.015, 0.252] & 0.137 & [0.012, 0.255] \\
+WESAD & 299 & 0.524 & [0.421, 0.619] & 0.579 & [0.495, 0.661] \\
+DREAMER & 82 & 0.032 & [-0.119, 0.204] & 0.095 & [-0.008, 0.215] \\
+AFEW-VA & 182 & 0.510 & [0.406, 0.584] & 0.523 & [0.409, 0.618] \\
+AFFEC & 118 & 0.342 & [0.184, 0.497] & 0.250 & [0.088, 0.410] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.340} & \textbf{[0.278, 0.397]} & \textbf{0.349} & \textbf{[0.292, 0.407]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-18 08:26] dagn_lib FusionLSTM evaluation — split=test
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.333 [0.249,0.412] A=0.319 [0.231,0.397] mean=0.326
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on pseudo test set (first 50\% of val, no gradient updates). CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 128 & 0.122 & [-0.039, 0.293] & 0.166 & [0.010, 0.316] \\
+WESAD & 149 & 0.495 & [0.341, 0.629] & 0.460 & [0.297, 0.597] \\
+DREAMER & 41 & 0.156 & [-0.000, 0.350] & 0.116 & [-0.014, 0.295] \\
+AFEW-VA & 91 & 0.599 & [0.474, 0.693] & 0.500 & [0.332, 0.634] \\
+AFFEC & 59 & 0.123 & [-0.124, 0.363] & 0.210 & [-0.041, 0.434] \\
+\midrule
+\textbf{GLOBAL} & 468 & \textbf{0.333} & \textbf{[0.249, 0.412]} & \textbf{0.319} & \textbf{[0.231, 0.397]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-18 17:14] dagn_lib FusionLSTM — best_ccc=0.322 epoch=68 params=819,770
+
+[2026-03-18 17:27] dagn_lib FusionLSTM — best_ccc=0.314 epoch=62 params=819,770
+
+[2026-03-18 17:40] dagn_lib FusionLSTM — best_ccc=0.328 epoch=74 params=819,770
+
+============================================================
+[2026-03-18 17:53] dagn_lib FusionLSTM evaluation — split=train
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.466 [0.443,0.492] A=0.472 [0.445,0.497] mean=0.469
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on training set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 1024 & 0.351 & [0.297, 0.402] & 0.309 & [0.248, 0.362] \\
+WESAD & 1199 & 0.655 & [0.620, 0.685] & 0.675 & [0.643, 0.707] \\
+DREAMER & 332 & 0.009 & [-0.051, 0.066] & -0.034 & [-0.096, 0.025] \\
+AFEW-VA & 732 & 0.514 & [0.466, 0.556] & 0.574 & [0.525, 0.620] \\
+AFFEC & 476 & 0.463 & [0.386, 0.539] & 0.449 & [0.371, 0.526] \\
+\midrule
+\textbf{GLOBAL} & 3763 & \textbf{0.466} & \textbf{[0.443, 0.492]} & \textbf{0.472} & \textbf{[0.445, 0.497]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-18 17:53] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.340 [0.281,0.394] A=0.371 [0.310,0.427] mean=0.355
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.102 & [-0.030, 0.222] & 0.168 & [0.051, 0.281] \\
+WESAD & 299 & 0.528 & [0.430, 0.609] & 0.587 & [0.495, 0.665] \\
+DREAMER & 82 & -0.096 & [-0.195, 0.013] & -0.085 & [-0.177, 0.020] \\
+AFEW-VA & 182 & 0.526 & [0.436, 0.587] & 0.491 & [0.386, 0.584] \\
+AFFEC & 118 & 0.415 & [0.261, 0.559] & 0.347 & [0.187, 0.505] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.340} & \textbf{[0.281, 0.394]} & \textbf{0.371} & \textbf{[0.310, 0.427]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-18 17:53] dagn_lib FusionLSTM evaluation — split=test
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.402 [0.327,0.482] A=0.370 [0.290,0.440] mean=0.386
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on pseudo test set (first 50\% of val, no gradient updates). CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 128 & 0.215 & [0.030, 0.385] & 0.174 & [0.006, 0.320] \\
+WESAD & 149 & 0.533 & [0.375, 0.645] & 0.533 & [0.390, 0.650] \\
+DREAMER & 41 & -0.127 & [-0.255, 0.011] & -0.038 & [-0.170, 0.170] \\
+AFEW-VA & 91 & 0.630 & [0.557, 0.684] & 0.537 & [0.391, 0.646] \\
+AFFEC & 59 & 0.355 & [0.104, 0.570] & 0.350 & [0.126, 0.565] \\
+\midrule
+\textbf{GLOBAL} & 468 & \textbf{0.402} & \textbf{[0.327, 0.482]} & \textbf{0.370} & \textbf{[0.290, 0.440]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-18 18:09] dagn_lib FusionLSTM — best_ccc=0.322 epoch=94 params=819,770
+
+============================================================
+[2026-03-18 18:42] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.324 [0.267,0.382] A=0.310 [0.253,0.367] mean=0.317
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.172 & [0.051, 0.288] & 0.135 & [0.018, 0.252] \\
+WESAD & 299 & 0.519 & [0.417, 0.609] & 0.539 & [0.438, 0.626] \\
+DREAMER & 82 & 0.002 & [-0.009, 0.011] & 0.001 & [-0.001, 0.003] \\
+AFEW-VA & 182 & 0.464 & [0.337, 0.556] & 0.542 & [0.438, 0.630] \\
+AFFEC & 118 & 0.215 & [0.027, 0.387] & -0.006 & [-0.183, 0.164] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.324} & \textbf{[0.267, 0.382]} & \textbf{0.310} & \textbf{[0.253, 0.367]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-18 18:52] dagn_lib FusionLSTM — best_ccc=0.319 epoch=28 params=819,770
+
+[2026-03-18 19:43] dagn_lib FusionLSTM — best_ccc=0.313 epoch=76 params=819,770
+
+============================================================
+[2026-03-18 20:05] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.369 [0.316,0.426] A=0.371 [0.313,0.434] mean=0.370
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.211 & [0.091, 0.322] & 0.089 & [-0.033, 0.206] \\
+WESAD & 299 & 0.487 & [0.379, 0.580] & 0.589 & [0.497, 0.668] \\
+DREAMER & 82 & 0.033 & [-0.049, 0.110] & 0.001 & [-0.036, 0.047] \\
+AFEW-VA & 182 & 0.534 & [0.431, 0.608] & 0.630 & [0.544, 0.698] \\
+AFFEC & 118 & 0.395 & [0.235, 0.541] & 0.287 & [0.113, 0.446] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.369} & \textbf{[0.316, 0.426]} & \textbf{0.371} & \textbf{[0.313, 0.434]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-19 06:57] dagn_lib FusionLSTM prior=OFF — best_ccc=0.336 epoch=100 params=819,770
+
+[2026-03-19 07:10] dagn_lib FusionLSTM prior=ON(λ=0.1) — best_ccc=0.138 epoch=28 params=819,770
+
+[2026-03-19 07:27] dagn_lib FusionLSTM prior=ON(λ=0.05) — best_ccc=0.194 epoch=48 params=819,770
+
+[2026-03-19 07:45] dagn_lib FusionLSTM prior=ON(λ=0.05) — best_ccc=0.321 epoch=75 params=819,770
+
+============================================================
+[2026-03-19 08:04] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.382 [0.329,0.434] A=0.363 [0.302,0.422] mean=0.373
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.178 & [0.047, 0.290] & 0.107 & [-0.003, 0.224] \\
+WESAD & 299 & 0.541 & [0.453, 0.611] & 0.575 & [0.496, 0.651] \\
+DREAMER & 82 & -0.037 & [-0.177, 0.117] & -0.052 & [-0.230, 0.146] \\
+AFEW-VA & 182 & 0.584 & [0.483, 0.643] & 0.641 & [0.550, 0.709] \\
+AFFEC & 118 & 0.456 & [0.298, 0.599] & 0.321 & [0.158, 0.472] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.382} & \textbf{[0.329, 0.434]} & \textbf{0.363} & \textbf{[0.302, 0.422]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-19 08:39] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.360 [0.302,0.415] A=0.399 [0.344,0.455] mean=0.380
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.145 & [0.024, 0.259] & 0.199 & [0.081, 0.320] \\
+WESAD & 299 & 0.531 & [0.431, 0.615] & 0.599 & [0.513, 0.677] \\
+DREAMER & 82 & -0.002 & [-0.091, 0.072] & 0.026 & [-0.089, 0.152] \\
+AFEW-VA & 182 & 0.543 & [0.430, 0.618] & 0.530 & [0.423, 0.623] \\
+AFFEC & 118 & 0.456 & [0.292, 0.599] & 0.379 & [0.211, 0.535] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.360} & \textbf{[0.302, 0.415]} & \textbf{0.399} & \textbf{[0.344, 0.455]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+============================================================
+[2026-03-19 08:51] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.360 [0.302,0.415] A=0.399 [0.344,0.455] mean=0.380
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.145 & [0.024, 0.259] & 0.199 & [0.081, 0.320] \\
+WESAD & 299 & 0.531 & [0.431, 0.615] & 0.599 & [0.513, 0.677] \\
+DREAMER & 82 & -0.002 & [-0.091, 0.072] & 0.026 & [-0.089, 0.152] \\
+AFEW-VA & 182 & 0.543 & [0.430, 0.618] & 0.530 & [0.423, 0.623] \\
+AFFEC & 118 & 0.456 & [0.292, 0.599] & 0.379 & [0.211, 0.535] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.360} & \textbf{[0.302, 0.415]} & \textbf{0.399} & \textbf{[0.344, 0.455]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-19 09:18] dagn_lib FusionLSTM prior=ON(face-only,λ=0.1) — best_ccc=0.323 epoch=45 params=819,770
+
+============================================================
+[2026-03-19 09:41] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.329 [0.274,0.382] A=0.344 [0.284,0.400] mean=0.337
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.114 & [0.002, 0.227] & 0.117 & [-0.009, 0.227] \\
+WESAD & 299 & 0.507 & [0.410, 0.584] & 0.544 & [0.452, 0.627] \\
+DREAMER & 82 & 0.024 & [-0.121, 0.172] & 0.101 & [-0.085, 0.281] \\
+AFEW-VA & 182 & 0.517 & [0.414, 0.587] & 0.526 & [0.428, 0.616] \\
+AFFEC & 118 & 0.275 & [0.090, 0.426] & 0.197 & [0.025, 0.361] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.329} & \textbf{[0.274, 0.382]} & \textbf{0.344} & \textbf{[0.284, 0.400]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================
+
+[2026-03-19 10:01] dagn_lib FusionLSTM prior=ON(full,λ=0.05) — best_ccc=0.319 epoch=88 params=819,770
+
+============================================================
+[2026-03-19 10:14] dagn_lib FusionLSTM evaluation — split=val
+Model: /home/alvar/dagn_lib/production/fusion_best.pth
+Prediction: last timestep (t=-1), matching production
+Global CCC: V=0.366 [0.313,0.418] A=0.362 [0.302,0.425] mean=0.364
+
+\begin{table}[ht]
+\centering
+\caption{Evaluation of FusionLSTM (dagn\_lib) on held-out validation set. CCC with 95\% bootstrap CI (n=1000).}
+\begin{tabular}{lrcccc}
+\toprule
+Dataset & N & CCC-V & 95\% CI & CCC-A & 95\% CI \\
+\midrule
+DEAP & 256 & 0.150 & [0.037, 0.261] & 0.056 & [-0.057, 0.180] \\
+WESAD & 299 & 0.543 & [0.447, 0.628] & 0.597 & [0.510, 0.677] \\
+DREAMER & 82 & -0.000 & [-0.000, 0.000] & -0.000 & [-0.000, 0.000] \\
+AFEW-VA & 182 & 0.558 & [0.458, 0.628] & 0.615 & [0.529, 0.689] \\
+AFFEC & 118 & 0.416 & [0.263, 0.565] & 0.361 & [0.201, 0.517] \\
+\midrule
+\textbf{GLOBAL} & 937 & \textbf{0.366} & \textbf{[0.313, 0.418]} & \textbf{0.362} & \textbf{[0.302, 0.425]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+============================================================

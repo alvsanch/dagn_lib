@@ -113,11 +113,16 @@ class DEAPDataset(Dataset):
                 gsr    = sig[CH_GSR,  :]    # (n_samples,)
                 temp_s = sig[CH_TEMP, :]    # (n_samples,)
 
-                # EEG zeroed: 32-ch → 2-ch TGAM2 approximation adds marginal signal
-                # (val CCC improvement +0.04 vs no-EEG) but physio (BVP/GSR/TEMP)
-                # is the primary modality for DEAP. Zeroing keeps DEAP consistent
-                # with AFFEC (face+physio only) and reduces feature noise.
-                eeg_feat = zeros_eeg(T)  # (T, 5)
+                # EEG: DEAP F3(ch2)/F4(ch19) → TGAM2 approximation.
+                # Zeroing hurt global CCC (0.319 vs 0.355) — DEAP EEG is the only
+                # EEG signal when DREAMER is excluded; removing it kills EEG learning.
+                eeg_feat = extract_eeg_features(
+                    eeg_data=eeg,
+                    sfreq=SFREQ,
+                    left_ch_idx=LEFT_CH,
+                    right_ch_idx=RIGHT_CH,
+                    T=T,
+                )  # (T, 5)
 
                 # Physio features — HRV from BVP, EDA from GSR, TEMP
                 physio_feat = extract_physio_features(

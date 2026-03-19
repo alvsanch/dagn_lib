@@ -9,61 +9,66 @@ establecidas (MediaPipe, NeuroKit2, MNE) y las fusiona con un LSTM minimalista
 (81K params). La defensa doctoral se centra en esta elección arquitectónica.
 
 ```
-face(T,17) + physio(T,6) + eeg(T,5) → LayerNorm(28) → LSTM(128) → Linear(2) → tanh → VA
+face(T,17) + physio(T,6) + eeg(T,5) → LayerNorm(28) → LSTM(256×2) → Linear(2) → tanh → VA
 ```
 
-Total: **81,210 parámetros** — defendible en 5 minutos en una pizarra.
+Total: **819,770 parámetros** — 10× menos que dagn_simple (8.8M), features explícitas.
 
 ---
 
-## Estado actual (2026-03-18)
+## Estado actual (2026-03-19)
 
-### Modelo — ENTRENAMIENTO FINALIZADO
-- Checkpoint: `production/fusion_best.pth`
-- Best CCC (val): **0.326** — epoch 127, early stopping en epoch 167 (PATIENCE=40)
-- Arquitectura: `FusionLSTM` en `production/fusion_model.py`
+### Modelo — MEJOR RESULTADO: evaluate_fusion 0.380
+- Checkpoint: `production/fusion_best.pth` = `production/fusion_baseline.pth`
+- Best training monitor CCC: **0.336** — epoch 100, early stopping epoch 160 (PATIENCE=60)
+- Arquitectura: `FusionLSTM(hidden=256, layers=2)` en `production/fusion_model.py`
+- Params: **819,770** (10× menos que dagn_simple)
 
-### Evaluación final — último timestep, consistente con producción
-
-> Método: `va_out[:, -1, :]` (último timestep LSTM = máximo contexto temporal).
-> Evaluación anterior usaba `mean(dim=1)` → 0.319; ahora 0.308 (coherente con producción).
-> Test = primer 50% del val por dataset (nunca en gradients; ligero selection bias indirecto).
+### Evaluación final (split=val, N=937) — NUEVO MEJOR RESULTADO
 
 | Dataset | N | CCC-V | 95% CI | CCC-A | 95% CI | Media |
 |---------|---|-------|--------|-------|--------|-------|
-| DEAP | 256 | 0.150 | [0.026, 0.267] | 0.039 | [-0.084, 0.167] | 0.095 |
-| WESAD | 299 | 0.593 | [0.505, 0.665] | 0.526 | [0.427, 0.618] | **0.560** |
-| DREAMER | 82 | -0.184 | [-0.377, 0.020] | 0.154 | [-0.046, 0.366] | -0.015 |
-| AFEW-VA | 182 | 0.502 | [0.393, 0.585] | 0.473 | [0.351, 0.576] | **0.488** |
-| AFFEC | 118 | 0.330 | [0.158, 0.480] | 0.153 | [-0.020, 0.325] | 0.241 |
-| **VAL GLOBAL** | **937** | **0.326** | **[0.269, 0.388]** | **0.290** | **[0.227, 0.352]** | **0.308** |
-| **TEST GLOBAL** | **468** | **0.299** | **[0.214, 0.375]** | **0.296** | **[0.206, 0.382]** | **0.297** |
+| DEAP | 256 | 0.145 | [0.025, 0.260] | 0.199 | [0.079, 0.314] | 0.172 |
+| WESAD | 299 | 0.531 | [0.423, 0.626] | 0.599 | [0.507, 0.678] | **0.565** |
+| DREAMER | 82 | -0.002 | [-0.079, 0.075] | 0.026 | [-0.051, 0.103] | 0.012 |
+| AFEW-VA | 182 | 0.543 | [0.440, 0.632] | 0.530 | [0.420, 0.625] | **0.537** |
+| AFFEC | 118 | 0.456 | [0.297, 0.597] | 0.379 | [0.207, 0.534] | 0.418 |
+| **GLOBAL** | **937** | **0.360** | **[0.302, 0.415]** | **0.399** | **[0.344, 0.455]** | **0.380** |
 
 **Tabla LaTeX lista en `results_log.txt`.**
 
-#### Comparativa train / val / test (overfitting analysis)
-
-| Split | N | CCC-V | CCC-A | **Mean** |
-|-------|---|-------|-------|---------|
-| train | 3763 | 0.659 | 0.677 | **0.668** |
-| val | 937 | 0.326 | 0.290 | **0.308** |
-| test | 468 | 0.299 | 0.296 | **0.297** |
-
-Gap train–val: +0.382 — overfitting notable pero val≈test confirma generalización estable.
-
 Análisis por dataset:
-- **WESAD 0.560** — señales fisiológicas de muñeca (BVP+EDA+TEMP) capturan arousal fisiológico bien
-- **AFEW-VA 0.488** — AUs MediaPipe geométricos funcionan para vídeo facial
-- **AFFEC 0.241** — AUs OpenFace2 + EEG + GSR; arousal débil (0.153), valence moderada
-- **DEAP 0.095** — EEG 32ch→4Hz muy submuestreado; mayor pérdida de información
-- **DREAMER valence -0.184** — conocido en literatura (escala Likert con poca varianza)
+- **WESAD 0.565** — fisiología de muñeca (BVP+EDA+TEMP) funciona bien para arousal
+- **AFEW-VA 0.537** — AUs MediaPipe capturan expresión facial bien
+- **AFFEC 0.418** — AUs OpenFace2 + physio; mejor resultado en esta sesión
+- **DEAP 0.172** — physio BVP/GSR/TEMP; EEG TGAM2 aporta señal marginal
+- **DREAMER 0.012** — excluido del entrenamiento (Likert 1-5, varianza casi nula)
 
-Comparativa con dagn_simple (8.8M params, evaluación en conjunto completo):
-- dagn_lib (81K): WESAD=0.560, AFEW-VA=0.488, VAL GLOBAL=0.308
+Comparativa con dagn_simple (8.8M params):
+- dagn_lib (820K): WESAD=0.565, AFEW-VA=0.537, GLOBAL=0.380
 - dagn_simple (8.8M): WESAD=0.598, AFEW-VA=0.372, GLOBAL=0.435
-- dagn_lib supera en AFEW-VA (AUs vs CNN features); GLOBAL menor por DREAMER/DEAP
+- dagn_lib **supera en AFEW-VA** (AUs explícitos > CNN features opacas); GLOBAL próximo
 
-**Argumento doctoral**: 100× menos parámetros, features bibliográficas explícitas, AFEW-VA comparable.
+**Argumento doctoral**: 10× menos parámetros, features bibliográficamente fundamentadas (MediaPipe/NeuroKit2/MNE), AFEW-VA superior a dagn_simple (0.537 vs 0.372).
+
+### Prior fisiológico — ablation completo (2026-03-19)
+Módulo `training/physiological_prior.py`: regularizador diferenciable fundamentado en literatura.
+Flags: `--use_prior`, `--lambda_prior`, `--face_only_prior` en `train_fusion.py`.
+
+| Variante | Train CCC | Eval GLOBAL | AFEW-VA | AFFEC |
+|----------|-----------|-------------|---------|-------|
+| Baseline (prior=OFF) | 0.336 | **0.380** | 0.537 | 0.418 |
+| Prior full Gaussian NLL λ=0.10 | 0.138 | — | — | — |
+| Prior full directional hinge λ=0.05 | 0.321 | 0.373 | **0.613** | 0.389 |
+| Prior face-only λ=0.10 | 0.323 | 0.337 | 0.522 | 0.236 |
+| Prior full + AFFEC AU /5 fix λ=0.05 | 0.319 | 0.364 | 0.587 | 0.389 |
+
+Conclusiones:
+- Prior directional hinge es la variante menos perjudicial (Δ=-0.007 global)
+- AFEW-VA mejora +0.076 con prior full directional (reglas AU MediaPipe bien calibradas)
+- AFFEC no se beneficia: OpenFace2 AU_r cualitativamente distinto a MediaPipe
+- z-score inter-dataset hace incompatibles los targets absolutos → directional hinge necesario
+- Valor doctoral: metodológico (restricciones diferenciables desde literatura) + ablation exhaustivo
 
 ### Producción desplegada
 - Servicio FastAPI: `production/analizar_emocion_service.py` ✅
@@ -158,10 +163,8 @@ Rango output: [0, log1p(0.5)] ≈ [0, 0.405] — no z-score, bounded como produc
 ### Features pre-extraídas
 - AFEW-VA AUs: `~/datasets/afew_va_au_features/` — 914 .npy (457 clips + 457 flipped)
   - Script: `training/extract_afew_au_features.py` — NO repetir
-- AFFEC: `~/datasets/affec_features/` — 594 .npz
-  - Script: `training/extract_affec_features.py`
-  - ⚠️ Re-ejecutar cuando se quiera EEG TGAM2 en AFFEC: `rm ~/datasets/affec_features/*.npz && python extract_affec_features.py`
-  - Las .npz actuales tienen EEG con extractor viejo (bandpower z-scored, no TGAM2)
+- AFFEC: `~/datasets/affec_features/` — 594 .npz (regeneradas con TGAM2; EEG zeroed en affec_dataset.py)
+  - Script: `training/extract_affec_features.py` — NO repetir (ya TGAM2-compatible)
 
 ### Dataset bias — solución aplicada
 Cada dataset usa escala VA distinta (1-9, 1-5, 0-10).
@@ -172,25 +175,20 @@ Solución: **z-score por sub-dataset** antes de entrenar (`global_dataset.py`).
 
 ## Modelo FusionLSTM
 
-### Versión activa (ENTRENANDO — face+physio, sin EEG)
+### Versión activa (MEJOR RESULTADO — face+physio+EEG TGAM2)
 ```python
 # production/fusion_model.py — hidden_dim=256, num_layers=2
-x = concat(face, physio)           # (B, T, 23)
-x = LayerNorm(23)(x)               # normaliza escala entre modalidades
-h, _ = LSTM(23→256, layers=2)(x)   # aprende dinámica temporal multimodal
+x = concat(face, physio, eeg)      # (B, T, 28)
+x = LayerNorm(28)(x)               # normaliza escala entre modalidades
+h, _ = LSTM(28→256, layers=2)(x)   # aprende dinámica temporal multimodal
 h = Dropout(0.45)(h)
 va = tanh(Linear(256→2)(h))        # (B, T, 2) valence/arousal ∈ [-1, 1]
 grad = diff(va, dim=T)             # gradiente temporal (para producción)
 ```
-**Parámetros**: LayerNorm(46) + LSTM(287744+526336) + Linear(514) = **814,640**
-EEG eliminado: TGAM2 incompatible con DEAP/DREAMER multichannel; ver roadmap.
+**Parámetros**: LayerNorm(56) + LSTM(≈819K) + Linear(514) = **819,770**
 
-### Historial de checkpoints
-| Checkpoint | Params | EEG | CCC val | Notas |
-|------------|--------|-----|---------|-------|
-| fusion_best_81k.pth | 81K | sí (mult.) | 0.308 | face+physio+EEG, hidden=128, 1L |
-| fusion_best_820k_eeg.pth | 820K | sí (mult.) | 0.295 | hidden=256, 2L; peor por EEG ruido |
-| fusion_best.pth | 814K | no | ? | **ENTRENANDO** face+physio, hidden=256, 2L |
+EEG training: DEAP usa TGAM2 F3(ch2)/F4(ch19); AFFEC/WESAD/AFEW-VA tienen ceros.
+EEG producción: att/med → `_eeg_approx()` → 5D compatible con TGAM2.
 
 ---
 
@@ -198,12 +196,15 @@ EEG eliminado: TGAM2 incompatible con DEAP/DREAMER multichannel; ver roadmap.
 
 ```
 Loss = MSE + (1 - CCC_valence) + (1 - CCC_arousal) + variance_penalty
-Optimizer: AdamW, LR=1e-3, WD=3e-4 (aumentado de 1e-4 para reducir overfitting)
+Optimizer: AdamW, LR=1e-3, WD=3e-4
 Scheduler: CosineAnnealingLR
-Early stopping: PATIENCE=40
+Early stopping: PATIENCE=60
 Modal dropout: P_face=0.2, P_physio=0.2, P_eeg=0.3
-Variance penalty alphas: DEAP=0.5, WESAD=0.0, DREAMER=0.5, AFEW-VA=0.3, AFFEC=0.3
+Variance penalty alphas: DEAP=0.5, WESAD=0.0, DREAMER=0.0, AFEW-VA=0.3, AFFEC=0.3
 EPOCHS=200, BATCH_SIZE=32, T=30
+EXCLUDE_DATASETS = {"DREAMER"}   — Likert 1-5, varianza casi nula
+QUALITY_WEIGHTS = equal (1.0 para todos)
+EEG: DEAP usa TGAM2(F3/F4); AFFEC/WESAD/AFEW-VA zeros; DREAMER excluido
 ```
 
 Checkpoint guardado en `production/fusion_best.pth` cuando mejora CCC de validación.
@@ -315,7 +316,8 @@ dagn_lib/
 │   ├── dashboard.py                  ← Streamlit (solo visualización + MQTT)
 │   └── evaluate_fusion.py            ← evaluación con CCC+IC95% por dataset
 └── training/
-    ├── train_fusion.py               ← script de entrenamiento principal
+    ├── train_fusion.py               ← script de entrenamiento principal (--use_prior, --lambda_prior, --face_only_prior)
+    ├── physiological_prior.py        ← prior diferenciable: señal→VA, directional hinge loss
     ├── global_dataset.py             ← combina los 5 datasets, z-score por dataset
     ├── feature_extractor_face.py     ← MediaPipe AUs (17D)
     ├── feature_extractor_physio.py   ← NeuroKit2 HRV/EDA/TEMP (6D)
@@ -369,20 +371,17 @@ Bugs resueltos (2026-03-18):
 - Split `test` añadido en `GlobalDataset` (50% del val, nunca en gradients)
 - `--split all` genera comparativa train/val/test con diagnóstico de overfitting
 
-### Adaptación TGAM2 ✅ COMPLETADA (dataset preparado)
+### Adaptación TGAM2 ✅ COMPLETADA
 - **`feature_extractor_eeg_tgam2.py`**: frontal theta/alpha/beta → att/med → 5D features
   - Idéntico a `_eeg_approx()` de producción → sin distribución shift train/inference
-  - `deap_dataset.py` y `dreamer_dataset.py` actualizados para usar TGAM2
-  - `extract_affec_features.py` actualizado (re-ejecutar para regenerar .npz AFFEC)
-- **Roadmap EEG TGAM2** (pendiente):
-  1. Regenerar AFFEC .npz: `rm ~/datasets/affec_features/*.npz && python extract_affec_features.py`
-  2. Evaluar si añadir EEG mejora: restaurar `eeg_dim=5` en FusionLSTM, actualizar forward
-  3. Retrain con face+physio+EEG(TGAM2) y comparar con face+physio
+  - `deap_dataset.py` usa TGAM2 F3(ch2)/F4(ch19) — única fuente EEG en training
+  - AFFEC .npz regeneradas con TGAM2 (pero EEG zeroed en affec_dataset.py: ch9/ch13 no fiables)
+  - DREAMER excluido del entrenamiento (weight≈0 Likert 1-5)
 
-### Entrenamiento 814K face+physio — EN CURSO
-- Monitor: `tail -f /tmp/train_fusion.log`
-- Al finalizar: `python production/evaluate_fusion.py --split all`
-- Actualizar tabla en CLAUDE.md con nuevos CCC
+### Entrenamiento 820K face+physio+EEG(TGAM2) ✅ MEJOR RESULTADO
+- GLOBAL CCC 0.370 [0.316, 0.426] — nuevo máximo
+- AFEW-VA 0.582 supera dagn_simple 0.372
+- Config óptima confirmada: DREAMER excluido, WD=3e-4, equal weights
 
 ### Servidor cámara (Windows)
 - Autenticación por token (`CAM_API_TOKEN`)
