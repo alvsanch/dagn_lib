@@ -4,28 +4,29 @@ fusion_model.py — FusionLSTM for dagn_lib
 Architecture (explainable on a whiteboard in 5 minutes):
 
     face   (T, 17) ──┐
-    physio (T,  6) ──┤── LayerNorm ── LSTM(28→256, 2L) ── Linear(256,2) ── tanh → VA (T, 2)
-    eeg    (T,  5) ──┘
+    physio (T,  6) ──┤── LayerNorm ── LSTM(33→256, 2L) ── Linear(256,2) ── tanh → VA (T, 2)
+    eeg    (T, 10) ──┘
 
     + temporal gradient: grad[t] = VA[t] - VA[t-1]
 
 Input features:
     face   — 17 Action Units (Ekman 1978 FACS), MediaPipe FaceMesh
     physio —  6 HRV/EDA/TEMP features (Task Force 1996, Boucsein 2012)
-    eeg    —  5 TGAM2-compatible features (att/med → theta/alpha/beta/asym/ratio)
-               Training: frontal bandpower → att/med → _eeg_approx()
-               Production: NeuroSky TGAM2 att/med → _eeg_approx()
-               Identical feature space — no train/inference distribution shift.
+    eeg    — 10 bilateral frontal features (Davidson 1988, Klimesch 1999)
+               [theta_avg, alpha_avg, beta_avg, FAA, ratio,
+                theta_L, theta_R, alpha_L, alpha_R, beta_L]
+               Training: F3/F7/FC1 (left) + F4/F8/FC2 (right) bandpower → 10D
+               Production: NeuroSky TGAM2 att/med → symmetric 10D (FAA=0)
 
-Total input dim = 28
+Total input dim = 33
 
 Parameter count (hidden_dim=256, num_layers=2):
-    LayerNorm(28):           56
-    LSTM(28→256, L1):   292,864   [4×(28+256+1+1)×256]
-    LSTM(256→256, L2):  526,336   [4×(256+256+1+1)×256]
+    LayerNorm(33):           66
+    LSTM(33→256, L1):   297,984   [4×(33+256+2)×256]
+    LSTM(256→256, L2):  526,336   [4×(256+256+2)×256]
     Linear(256→2):          514
     ──────────────────────────────
-    Total:              819,770   ≪ 8.8M dagn_simple ✓
+    Total:              824,900   ≪ 8.8M dagn_simple ✓
 
 Usage:
     model = FusionLSTM()
@@ -37,8 +38,8 @@ import torch.nn as nn
 # Feature dimensions (must match global_dataset.py)
 FACE_DIM   = 17
 PHYSIO_DIM = 6
-EEG_DIM    = 5
-INPUT_DIM  = FACE_DIM + PHYSIO_DIM + EEG_DIM  # 28
+EEG_DIM    = 10
+INPUT_DIM  = FACE_DIM + PHYSIO_DIM + EEG_DIM  # 33
 
 
 class FusionLSTM(nn.Module):
@@ -46,7 +47,7 @@ class FusionLSTM(nn.Module):
     Multimodal fusion via LSTM on concatenated library-extracted features.
 
     Architecture:
-        1. Concatenate (face ‖ physio ‖ eeg) → (B, T, 28)
+        1. Concatenate (face ‖ physio ‖ eeg) → (B, T, 33)
         2. LayerNorm(28) — normalize scale across modalities
         3. LSTM(28, hidden_dim, num_layers) → (B, T, hidden_dim)
         4. Dropout(p)
@@ -56,7 +57,7 @@ class FusionLSTM(nn.Module):
     Args:
         face_dim:    input face feature dimension (default 17, FACS AUs)
         physio_dim:  input physio feature dimension (default 6)
-        eeg_dim:     input EEG feature dimension (default 5, TGAM2-compatible)
+        eeg_dim:     input EEG feature dimension (default 10, bilateral frontal)
         hidden_dim:  LSTM hidden size (default 256)
         num_layers:  number of stacked LSTM layers (default 2)
         dropout:     dropout probability after final LSTM layer (default 0.45)

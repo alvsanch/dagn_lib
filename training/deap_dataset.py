@@ -26,11 +26,11 @@ import numpy as np
 from pathlib import Path
 from torch.utils.data import Dataset
 
-from feature_extractor_eeg_tgam2 import (
-    extract_eeg_features_tgam2 as extract_eeg_features,
-    zeros_eeg_tgam2 as zeros_eeg,
-    DEAP_LEFT_FRONTAL,
-    DEAP_RIGHT_FRONTAL,
+from feature_extractor_eeg_full import (
+    extract_eeg_features_full,
+    zeros_eeg_full,
+    DEAP_LEFT_FRONTAL_FULL,
+    DEAP_RIGHT_FRONTAL_FULL,
 )
 from feature_extractor_physio import extract_physio_features, zeros_physio
 from feature_extractor_face import zeros_face
@@ -51,9 +51,9 @@ CH_BVP  = 39
 
 # EEG channels: 0-31
 N_EEG_CH = 32
-# Frontal for asymmetry: F3=index 2, F4=index 19
-LEFT_CH  = DEAP_LEFT_FRONTAL   # 2  (F3)
-RIGHT_CH = DEAP_RIGHT_FRONTAL  # 19 (F4)
+# Bilateral frontal: F3=2,F7=3,FC1=5 (left) | F4=19,F8=20,FC2=22 (right)
+LEFT_CHS  = DEAP_LEFT_FRONTAL_FULL   # [2, 3, 5]  (F3, F7, FC1)
+RIGHT_CHS = DEAP_RIGHT_FRONTAL_FULL  # [19, 20, 22] (F4, F8, FC2)
 
 WIN_SAMPLES = int(WINDOW_SEC * SFREQ)  # 128 samples per window
 MIN_SAMPLES = T * WIN_SAMPLES          # need at least T seconds
@@ -113,16 +113,17 @@ class DEAPDataset(Dataset):
                 gsr    = sig[CH_GSR,  :]    # (n_samples,)
                 temp_s = sig[CH_TEMP, :]    # (n_samples,)
 
-                # EEG: DEAP F3(ch2)/F4(ch19) → TGAM2 approximation.
-                # Zeroing hurt global CCC (0.319 vs 0.355) — DEAP EEG is the only
-                # EEG signal when DREAMER is excluded; removing it kills EEG learning.
-                eeg_feat = extract_eeg_features(
+                # EEG: bilateral frontal (F3/F7/FC1 left, F4/F8/FC2 right) → 10D.
+                # Includes FAA (Davidson 1988) + bilateral theta/alpha/beta.
+                # Zeroing DEAP EEG hurt global CCC (0.319 vs 0.355) — only EEG
+                # source in training (DREAMER excluded).
+                eeg_feat = extract_eeg_features_full(
                     eeg_data=eeg,
                     sfreq=SFREQ,
-                    left_ch_idx=LEFT_CH,
-                    right_ch_idx=RIGHT_CH,
+                    left_ch_idxs=LEFT_CHS,
+                    right_ch_idxs=RIGHT_CHS,
                     T=T,
-                )  # (T, 5)
+                )  # (T, 10)
 
                 # Physio features — HRV from BVP, EDA from GSR, TEMP
                 physio_feat = extract_physio_features(
@@ -139,7 +140,7 @@ class DEAPDataset(Dataset):
                 self.samples.append((
                     zeros_face(T),        # (T, 17) — no video
                     physio_feat,           # (T, 6)
-                    eeg_feat,              # (T, 5)
+                    eeg_feat,              # (T, 10)
                     va,                    # (2,) — same label for all T
                 ))
 

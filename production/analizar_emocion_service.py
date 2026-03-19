@@ -199,14 +199,19 @@ class EmotionService:
 
     def _eeg_approx(self, att: float, med: float) -> np.ndarray:
         """
-        Approximate 5 EEG features from NeuroSky Attention/Meditation (0-100).
+        Approximate 10 EEG features from NeuroSky Attention/Meditation (0-100).
 
-        Maps to the same feature space as feature_extractor_eeg.py:
-            [0] theta_log     — log(theta): high when low attention
-            [1] alpha_log     — log(alpha): high when meditative
-            [2] beta_log      — log(beta) : high when attentive
-            [3] alpha_asym    — 0.0       : no frontal channels from NeuroSky
-            [4] theta_alpha   — theta - alpha: cognitive load index
+        Matches the bilateral frontal feature space of feature_extractor_eeg_full.py:
+            [0] theta_avg  — (theta_L+theta_R)/2, symmetric (L=R from single electrode)
+            [1] alpha_avg  — (alpha_L+alpha_R)/2
+            [2] beta_avg   — (beta_L+beta_R)/2
+            [3] FAA        — 0.0 (no bilateral info from single-electrode TGAM2)
+            [4] ratio      — theta - alpha (Klimesch 1999 cognitive load index)
+            [5] theta_L    — same as theta_avg (symmetric)
+            [6] theta_R    — same as theta_avg (symmetric)
+            [7] alpha_L    — same as alpha_avg (symmetric)
+            [8] alpha_R    — same as alpha_avg (symmetric)
+            [9] beta_L     — same as beta_avg  (symmetric)
 
         References: Davidson (1988), Klimesch (1999)
         """
@@ -215,9 +220,11 @@ class EmotionService:
         theta = float(np.log1p((1.0 - att_n) * 0.5))
         alpha = float(np.log1p(med_n * 0.5))
         beta  = float(np.log1p(att_n * 0.5))
-        asym  = 0.0
+        faa   = 0.0           # no lateral info from single-electrode TGAM2
         ratio = theta - alpha
-        return np.array([theta, alpha, beta, asym, ratio], dtype=np.float32)
+        # Bilateral features symmetric (L = R)
+        return np.array([theta, alpha, beta, faa, ratio,
+                         theta, theta, alpha, alpha, beta], dtype=np.float32)
 
     def _compute_physio(self, sfreq: float) -> np.ndarray:
         """

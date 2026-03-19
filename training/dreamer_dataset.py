@@ -30,11 +30,11 @@ try:
 except ImportError:
     loadmat = None
 
-from feature_extractor_eeg_tgam2 import (
-    extract_eeg_features_tgam2 as extract_eeg_features,
-    zeros_eeg_tgam2 as zeros_eeg,
-    DREAMER_LEFT_FRONTAL,
-    DREAMER_RIGHT_FRONTAL,
+from feature_extractor_eeg_full import (
+    extract_eeg_features_full,
+    zeros_eeg_full,
+    DREAMER_LEFT_FRONTAL_FULL,
+    DREAMER_RIGHT_FRONTAL_FULL,
 )
 from feature_extractor_physio import extract_physio_features, zeros_physio
 from feature_extractor_face import zeros_face
@@ -48,9 +48,9 @@ N_STIMULI    = 18
 T            = 30     # timesteps per sample
 WINDOW_SEC   = 1.0    # seconds per timestep
 
-# EPOC frontal channels for alpha asymmetry
-LEFT_CH  = DREAMER_LEFT_FRONTAL   # F3 = index 2
-RIGHT_CH = DREAMER_RIGHT_FRONTAL  # F4 = index 11
+# Bilateral frontal: F7=1,F3=2,FC5=3 (left) | FC6=10,F4=11,F8=12 (right)
+LEFT_CHS  = DREAMER_LEFT_FRONTAL_FULL   # [1, 2, 3]
+RIGHT_CHS = DREAMER_RIGHT_FRONTAL_FULL  # [10, 11, 12]
 
 
 def _load_dreamer_mat(mat_path):
@@ -134,11 +134,11 @@ class DREAMERDataset(Dataset):
             except Exception:
                 ecg_raw = None
 
-            # EEG features
-            eeg_feat = extract_eeg_features(
+            # EEG features — bilateral frontal (10D)
+            eeg_feat = extract_eeg_features_full(
                 eeg_raw, SFREQ_EEG,
-                left_ch_idx=LEFT_CH,
-                right_ch_idx=RIGHT_CH,
+                left_ch_idxs=LEFT_CHS,
+                right_ch_idxs=RIGHT_CHS,
                 window_sec=WINDOW_SEC,
                 T=T,
             )  # (T, 5)
@@ -163,7 +163,7 @@ class DREAMERDataset(Dataset):
             self.samples.append((
                 zeros_face(T),   # (T, 17) — no video
                 physio_feat,      # (T, 6)
-                eeg_feat,         # (T, 5)
+                eeg_feat,         # (T, 10)
                 va,               # (2,)
             ))
 

@@ -27,7 +27,7 @@ from pathlib import Path
 from torch.utils.data import Dataset
 
 from feature_extractor_physio import zeros_physio
-from feature_extractor_eeg    import zeros_eeg
+from feature_extractor_eeg_full import zeros_eeg_full as zeros_eeg
 from feature_extractor_face   import zeros_face
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -76,11 +76,11 @@ class AFFECDataset(Dataset):
                 # EEG zeroed: 63-ch g.tec → 2-ch TGAM2 approximation is unreliable.
                 # TGAM2 frontal electrode indices (ch9, ch13) may not correspond to
                 # F3/F4 in the actual EDF channel order. Face+physio carry AFFEC.
-                eeg    = np.zeros((d["face"].shape[0], 5), dtype=np.float32)
+                eeg    = zeros_eeg(d["face"].shape[0])  # (T, 10)
                 va     = d["va"].astype(np.float32)      # (2,)
 
                 # Verify shapes
-                if face.shape != (T, 17) or physio.shape != (T, 6) or eeg.shape != (T, 5):
+                if face.shape != (T, 17) or physio.shape != (T, 6) or eeg.shape[0] != T:
                     continue
 
                 self.samples.append((face, physio, eeg, va))

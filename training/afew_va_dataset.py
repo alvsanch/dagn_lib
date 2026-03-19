@@ -22,7 +22,7 @@ from pathlib import Path
 from torch.utils.data import Dataset
 
 from feature_extractor_physio import zeros_physio
-from feature_extractor_eeg import zeros_eeg
+from feature_extractor_eeg_full import zeros_eeg_full as zeros_eeg
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 AFEW_VA_DIR   = Path("/mnt/f/source_datasets/Fisiologico/AFEW-VA")
