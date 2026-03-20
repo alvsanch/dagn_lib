@@ -25,6 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.optim.swa_utils import AveragedModel
 
 # Allow imports from training/ and production/
 sys.path.insert(0, str(Path(__file__).parent))
@@ -41,6 +42,7 @@ LR          = 1e-3
 WEIGHT_DECAY= 3e-4   # reverted: 5e-4 was too aggressive, caused AFFEC collapse (0.381→0.105)
 PATIENCE    = 60
 T           = 30     # timesteps per sample
+SWA_START   = 80     # epoch from which to start SWA weight averaging (Izmailov et al. 2018)
 
 # Modal dropout probabilities (zero out entire modality per sample)
 P_FACE_DROP   = 0.2
@@ -230,6 +232,9 @@ def train():
     n_params = model.describe()
     print()
 
+    # SWA: averaged model accumulates weights from epoch SWA_START onward
+    swa_model = AveragedModel(model)
+
     prior = None
     if args.use_prior:
         p_weight = 0.0 if args.face_only_prior else 1.0
@@ -303,6 +308,10 @@ def train():
         print(f"{epoch:4d} {avg_loss:10.4f} {global_ccc[0]:7.3f} {global_ccc[1]:7.3f} "
               f"{mean_ccc:7.3f}  [{ds_str}]", flush=True)
 
+        # SWA: accumulate averaged weights
+        if epoch >= SWA_START:
+            swa_model.update_parameters(model)
+
         # Early stopping & checkpointing
         if mean_ccc > best_ccc:
             best_ccc  = mean_ccc
@@ -317,6 +326,25 @@ def train():
                 break
 
     print(f"\nTraining done. Best CCC={best_ccc:.3f} at epoch {best_ep}")
+
+    # SWA final evaluation — compare averaged model vs best checkpoint
+    if best_ep >= SWA_START:
+        print("Evaluating SWA model on validation set...")
+        swa_results = eval_ccc_by_dataset(swa_model, val_loader)
+        swa_global  = swa_results.get("GLOBAL", (0.0, 0.0))
+        swa_mean    = (swa_global[0] + swa_global[1]) / 2.0
+        print(f"SWA  model: CCC-V={swa_global[0]:.3f} CCC-A={swa_global[1]:.3f} Mean={swa_mean:.3f}")
+        print(f"Best model: Mean={best_ccc:.3f}")
+        if swa_mean > best_ccc:
+            print(f"SWA beats regular best — saving SWA checkpoint")
+            torch.save(swa_model.module.state_dict(), BEST_PATH)
+            best_ccc = swa_mean
+            best_ep  = f"{best_ep}+SWA"
+        else:
+            print(f"Regular best checkpoint retained")
+    else:
+        print(f"SWA_START={SWA_START} not reached — no SWA model available")
+
     print(f"Model saved: {BEST_PATH}")
 
     # Final evaluation log
