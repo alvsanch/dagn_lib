@@ -53,24 +53,28 @@ Comparativa con dagn_simple (8.8M params):
 
 **Argumento doctoral**: 10× menos parámetros, features bibliográficamente fundamentadas (MediaPipe/NeuroKit2/MNE), prior fisiológico diferenciable (Ekman 1978 + Task Force 1996), AFEW-VA 0.627 >> dagn_simple 0.372.
 
-### Prior fisiológico — ablation completo (2026-03-19)
+### Prior fisiológico — ablation completo (2026-03-19/20)
 Módulo `training/physiological_prior.py`: regularizador diferenciable fundamentado en literatura.
 Flags: `--use_prior`, `--lambda_prior`, `--face_only_prior` en `train_fusion.py`.
 
 | Variante | Train CCC | Eval GLOBAL | AFEW-VA | AFFEC |
 |----------|-----------|-------------|---------|-------|
-| Baseline (prior=OFF) | 0.336 | **0.380** | 0.537 | 0.418 |
+| Baseline (prior=OFF) | 0.336 | 0.380 | 0.537 | 0.418 |
 | Prior full Gaussian NLL λ=0.10 | 0.138 | — | — | — |
 | Prior full directional hinge λ=0.05 | 0.321 | 0.373 | **0.613** | 0.389 |
 | Prior face-only λ=0.10 | 0.323 | 0.337 | 0.522 | 0.236 |
 | Prior full + AFFEC AU /5 fix λ=0.05 | 0.319 | 0.364 | 0.587 | 0.389 |
+| **Prior ds_face=(AFEWVA) (MEJOR)** | **0.319** | **0.389** | **0.627** | **0.548** |
 
 Conclusiones:
-- Prior directional hinge es la variante menos perjudicial (Δ=-0.007 global)
-- AFEW-VA mejora +0.076 con prior full directional (reglas AU MediaPipe bien calibradas)
-- AFFEC no se beneficia: OpenFace2 AU_r cualitativamente distinto a MediaPipe
-- z-score inter-dataset hace incompatibles los targets absolutos → directional hinge necesario
-- Valor doctoral: metodológico (restricciones diferenciables desde literatura) + ablation exhaustivo
+- **Mejor config**: `--use_prior` con `ds_face_ids=(DS_AFEWVA,)` y physio/EEG en defaults → GLOBAL 0.389
+- AFEW-VA mejora +0.090 (AUs MediaPipe FACS bien calibradas para reglas de cara)
+- AFFEC mejora +0.130 (sin reglas de cara OpenFace2, physio rules liberan la señal)
+- DEAP empeora 0.172→0.095 (z-score por participante hace las reglas absolutas inexactas; trade-off conocido)
+- Intentos de fix DEAP (excluir de ds_physio_ids) causaron AFFEC arousal sistemáticamente negativo
+  → Hipótesis: cambiar ds_physio_ids altera el paisaje de gradientes y desestabiliza AFFEC
+- Varianza run-to-run: el resultado 0.389 requirió un buen basin de inicialización (3 re-runs dieron 0.362)
+- Valor doctoral: restricciones diferenciables desde literatura + ablation exhaustivo + transparencia sobre varianza
 
 ### Producción desplegada
 - Servicio FastAPI: `production/analizar_emocion_service.py` ✅

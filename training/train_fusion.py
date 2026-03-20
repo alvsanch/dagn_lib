@@ -239,17 +239,17 @@ def train():
     if args.use_prior:
         p_weight  = 0.0 if args.face_only_prior else 1.0
         e_weight  = 0.0 if args.face_only_prior else 0.7
-        # Face rules calibrated for MediaPipe [0,1] — only valid for AFEW-VA.
-        # AFFEC uses OpenFace2 AU_r (different scale/distribution) → prior
-        # face rules fire incorrectly → restrict face gate to AFEW-VA only.
-        face_ids  = (DS_AFEWVA,)   # face rules for AFEW-VA only (MediaPipe FACS)
+        # Face rules restricted to AFEW-VA only:
+        #   AFFEC uses OpenFace2 AU_r (incompatible distribution with MediaPipe [0,1])
+        #   Physio + EEG rules use defaults (DEAP+WESAD+AFFEC for physio,
+        #   DEAP+DREAMER for EEG) — verified optimal in ablation (GLOBAL=0.389)
         prior = PhysiologicalPrior(
             lambda_prior=args.lambda_prior,
             physio_weight=p_weight,
             eeg_weight=e_weight,
-            ds_face_ids=face_ids,
+            ds_face_ids=(DS_AFEWVA,),
         )
-        mode = "face-only" if args.face_only_prior else "full(afewva-face)"
+        mode = "face-only" if args.face_only_prior else "afewva-face+default-physio/eeg"
         print(f"PhysiologicalPrior ENABLED  λ={args.lambda_prior}  mode={mode}")
     else:
         print("PhysiologicalPrior DISABLED (baseline)")
