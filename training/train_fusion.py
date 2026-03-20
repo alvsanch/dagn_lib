@@ -215,6 +215,12 @@ args = parser.parse_args()
 
 # ─── Training loop ────────────────────────────────────────────────────────────
 def train():
+    # Fix random seed for reproducible initialization (eliminates run-to-run variance)
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+
     print(f"Device: {DEVICE}")
     print(f"Building datasets (feature computation may take several minutes)...")
     t0 = time.time()
@@ -328,7 +334,7 @@ def train():
     print(f"\nTraining done. Best CCC={best_ccc:.3f} at epoch {best_ep}")
 
     # SWA final evaluation — compare averaged model vs best checkpoint
-    if best_ep >= SWA_START:
+    if swa_model.n_averaged.item() > 0:
         print("Evaluating SWA model on validation set...")
         swa_results = eval_ccc_by_dataset(swa_model, val_loader)
         swa_global  = swa_results.get("GLOBAL", (0.0, 0.0))
@@ -343,7 +349,7 @@ def train():
         else:
             print(f"Regular best checkpoint retained")
     else:
-        print(f"SWA_START={SWA_START} not reached — no SWA model available")
+        print(f"Training ended before SWA_START={SWA_START} — no SWA model available")
 
     print(f"Model saved: {BEST_PATH}")
 
