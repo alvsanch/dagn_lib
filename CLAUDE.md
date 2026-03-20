@@ -16,13 +16,14 @@ Total: **819,770 parámetros** — 10× menos que dagn_simple (8.8M), features e
 
 ---
 
-## Estado actual (2026-03-19)
+## Estado actual (2026-03-20) — MODELO CERRADO ✅
 
-### Modelo — MEJOR RESULTADO: evaluate_fusion 0.380
-- Checkpoint: `production/fusion_best.pth` = `production/fusion_baseline.pth`
+### Modelo — RESULTADO FINAL: evaluate_fusion 0.380
+- Checkpoint: `production/fusion_best.pth` = `production/fusion_baseline.pth` (Mar 19 07:01)
 - Best training monitor CCC: **0.336** — epoch 100, early stopping epoch 160 (PATIENCE=60)
 - Arquitectura: `FusionLSTM(hidden=256, layers=2)` en `production/fusion_model.py`
 - Params: **819,770** (10× menos que dagn_simple)
+- **ATENCIÓN**: `fusion_best.pth` puede ser sobreescrito por nuevos trainings. `fusion_baseline.pth` es el 0.380 seguro.
 
 ### Evaluación final (split=val, N=937) — NUEVO MEJOR RESULTADO
 
@@ -205,9 +206,12 @@ EPOCHS=200, BATCH_SIZE=32, T=30
 EXCLUDE_DATASETS = {"DREAMER"}   — Likert 1-5, varianza casi nula
 QUALITY_WEIGHTS = equal (1.0 para todos)
 EEG: DEAP usa TGAM2(F3/F4); AFFEC/WESAD/AFEW-VA zeros; DREAMER excluido
+Seed: torch.manual_seed(42) + np.random.seed(42) — reproducibilidad
+SWA: AveragedModel desde epoch SWA_START=80; evaluado vs best al final
 ```
 
 Checkpoint guardado en `production/fusion_best.pth` cuando mejora CCC de validación.
+SWA se evalúa al final: si bate el best regular, sobreescribe el checkpoint.
 
 ---
 
@@ -358,35 +362,28 @@ dagn_lib/
 
 ---
 
-## Próximos pasos (2026-03-18)
+## Estado final (2026-03-20) — TODO CERRADO ✅
 
-### Estado de producción ✅ OPERATIVO
-Bugs resueltos (2026-03-18):
-- `_get_new_frames`: cursor inicializado al último frame en reset de sesión → warmup avanza
-- rPPG cap reducido 60 → 5 frames/llamada (cv2.imread NTFS/WSL ~100ms/frame)
-- `st.plotly_chart(use_container_width=True)` → `width='stretch'` (Streamlit 1.53.1)
+### Modelo ✅ CERRADO — GLOBAL CCC 0.380
+Checkpoint definitivo: `production/fusion_baseline.pth` = `production/fusion_best.pth`
 
-### Estado de evaluación ✅ ACTUALIZADA
-- `evaluate_fusion.py` ahora usa último timestep (`va_out[:, -1, :]`) = consistente con producción
-- Split `test` añadido en `GlobalDataset` (50% del val, nunca en gradients)
-- `--split all` genera comparativa train/val/test con diagnóstico de overfitting
+### Ablations completados ✅
+- Prior fisiológico (2026-03-19): directional hinge es la menos perjudicial (Δ=-0.007). Baseline gana.
+- EEG 10D bilateral (2026-03-19): degradó (0.345). Revertido. F3/F4 5D es suficiente.
+- SWA + seed fija (2026-03-20): seed=42 da eval 0.376 reproducible. SWA no mejora en seed=42 (best en ep80 → SWA promedia modelos degradados). Model soup falla con inits distintas. Baseline 0.380 definitivo.
 
-### Adaptación TGAM2 ✅ COMPLETADA
-- **`feature_extractor_eeg_tgam2.py`**: frontal theta/alpha/beta → att/med → 5D features
-  - Idéntico a `_eeg_approx()` de producción → sin distribución shift train/inference
-  - `deap_dataset.py` usa TGAM2 F3(ch2)/F4(ch19) — única fuente EEG en training
-  - AFFEC .npz regeneradas con TGAM2 (pero EEG zeroed en affec_dataset.py: ch9/ch13 no fiables)
-  - DREAMER excluido del entrenamiento (weight≈0 Likert 1-5)
-
-### Entrenamiento 820K face+physio+EEG(TGAM2) ✅ MEJOR RESULTADO
-- GLOBAL CCC 0.370 [0.316, 0.426] — nuevo máximo
-- AFEW-VA 0.582 supera dagn_simple 0.372
-- Config óptima confirmada: DREAMER excluido, WD=3e-4, equal weights
+### Producción ✅ OPERATIVO
+- FastAPI service + Streamlit dashboard funcionando (2026-03-18)
 
 ### Servidor cámara (Windows)
 - Autenticación por token (`CAM_API_TOKEN`)
 - DEBE arrancar con `host='0.0.0.0'` para que WSL conecte vía `172.26.96.1`
 - Token: `3f7a1c2d-8e4b-4f9a-b1c2-d3e4f5a6b7c8` (también en `.streamlit/secrets.toml`)
+
+### Aprendizajes técnicos (SWA 2026-03-20)
+- SWA ayuda cuando el modelo mejora durante la ventana de averaging (best_ep en medio del rango SWA)
+- SWA_START=80 con best en ep100 sería el escenario ideal; con best en ep80 es perjudicial
+- Model soup (Wortsman 2022) NO funciona con inicializaciones distintas; solo con fine-tunes de misma base
 
 ---
 
