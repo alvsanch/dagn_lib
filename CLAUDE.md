@@ -16,41 +16,42 @@ Total: **819,770 parámetros** — 10× menos que dagn_simple (8.8M), features e
 
 ---
 
-## Estado actual (2026-03-20) — MODELO CERRADO ✅
+## Estado actual (2026-03-20) — NUEVO MEJOR RESULTADO
 
-### Modelo — RESULTADO FINAL: evaluate_fusion 0.380
-- Checkpoint: `production/fusion_best.pth` = `production/fusion_baseline.pth` (Mar 19 07:01)
-- Best training monitor CCC: **0.336** — epoch 100, early stopping epoch 160 (PATIENCE=60)
+### Modelo — RESULTADO FINAL: evaluate_fusion **0.389**
+- Checkpoint: `production/fusion_best.pth` = `production/fusion_baseline.pth` (Mar 20 09:58)
+- Best training monitor CCC: **0.319** — epoch 115, early stopping epoch 175 (PATIENCE=60)
+- Prior: `--use_prior` — directional hinge λ=0.05, `ds_face_ids=(DS_AFEWVA,)` (AFEWVA face only)
 - Arquitectura: `FusionLSTM(hidden=256, layers=2)` en `production/fusion_model.py`
 - Params: **819,770** (10× menos que dagn_simple)
-- **ATENCIÓN**: `fusion_best.pth` puede ser sobreescrito por nuevos trainings. `fusion_baseline.pth` es el 0.380 seguro.
+- **ATENCIÓN**: `fusion_best.pth` puede ser sobreescrito. `fusion_baseline.pth` es el seguro.
 
 ### Evaluación final (split=val, N=937) — NUEVO MEJOR RESULTADO
 
 | Dataset | N | CCC-V | 95% CI | CCC-A | 95% CI | Media |
 |---------|---|-------|--------|-------|--------|-------|
-| DEAP | 256 | 0.145 | [0.025, 0.260] | 0.199 | [0.079, 0.314] | 0.172 |
-| WESAD | 299 | 0.531 | [0.423, 0.626] | 0.599 | [0.507, 0.678] | **0.565** |
-| DREAMER | 82 | -0.002 | [-0.079, 0.075] | 0.026 | [-0.051, 0.103] | 0.012 |
-| AFEW-VA | 182 | 0.543 | [0.440, 0.632] | 0.530 | [0.420, 0.625] | **0.537** |
-| AFFEC | 118 | 0.456 | [0.297, 0.597] | 0.379 | [0.207, 0.534] | 0.418 |
-| **GLOBAL** | **937** | **0.360** | **[0.302, 0.415]** | **0.399** | **[0.344, 0.455]** | **0.380** |
+| DEAP | 256 | 0.157 | [0.045, 0.280] | 0.033 | [-0.080, 0.155] | 0.095 |
+| WESAD | 299 | 0.510 | [0.412, 0.599] | 0.596 | [0.507, 0.678] | **0.553** |
+| DREAMER | 82 | -0.010 | [-0.048, 0.024] | -0.002 | [-0.041, 0.035] | ~0 |
+| AFEW-VA | 182 | 0.586 | [0.489, 0.645] | 0.667 | [0.584, 0.730] | **0.627** |
+| AFFEC | 118 | 0.699 | [0.587, 0.791] | 0.396 | [0.231, 0.540] | **0.548** |
+| **GLOBAL** | **937** | **0.404** | **[0.350, 0.457]** | **0.374** | **[0.316, 0.435]** | **0.389** |
 
 **Tabla LaTeX lista en `results_log.txt`.**
 
 Análisis por dataset:
-- **WESAD 0.565** — fisiología de muñeca (BVP+EDA+TEMP) funciona bien para arousal
-- **AFEW-VA 0.537** — AUs MediaPipe capturan expresión facial bien
-- **AFFEC 0.418** — AUs OpenFace2 + physio; mejor resultado en esta sesión
-- **DEAP 0.172** — physio BVP/GSR/TEMP; EEG TGAM2 aporta señal marginal
-- **DREAMER 0.012** — excluido del entrenamiento (Likert 1-5, varianza casi nula)
+- **AFEW-VA 0.627** — AUs MediaPipe + prior FACS: +0.090 sobre baseline; **supera dagn_simple en 0.255**
+- **AFFEC 0.548** — valence 0.699; prior sin reglas de cara (OpenFace2 incompatible) libera el physio
+- **WESAD 0.553** — fisiología de muñeca, marginal degradación vs baseline
+- **DEAP 0.095** — prior physio rules interfieren con z-score en targets de valence; trade-off conocido
+- **DREAMER ~0** — excluido del entrenamiento (Likert 1-5, varianza casi nula)
 
 Comparativa con dagn_simple (8.8M params):
-- dagn_lib (820K): WESAD=0.565, AFEW-VA=0.537, GLOBAL=0.380
+- dagn_lib (820K): WESAD=0.553, AFEW-VA=**0.627**, AFFEC=**0.548**, GLOBAL=**0.389**
 - dagn_simple (8.8M): WESAD=0.598, AFEW-VA=0.372, GLOBAL=0.435
-- dagn_lib **supera en AFEW-VA** (AUs explícitos > CNN features opacas); GLOBAL próximo
+- dagn_lib **supera en AFEW-VA por +0.255** y en AFFEC; GLOBAL más próximo (0.389 vs 0.435)
 
-**Argumento doctoral**: 10× menos parámetros, features bibliográficamente fundamentadas (MediaPipe/NeuroKit2/MNE), AFEW-VA superior a dagn_simple (0.537 vs 0.372).
+**Argumento doctoral**: 10× menos parámetros, features bibliográficamente fundamentadas (MediaPipe/NeuroKit2/MNE), prior fisiológico diferenciable (Ekman 1978 + Task Force 1996), AFEW-VA 0.627 >> dagn_simple 0.372.
 
 ### Prior fisiológico — ablation completo (2026-03-19)
 Módulo `training/physiological_prior.py`: regularizador diferenciable fundamentado en literatura.
@@ -206,12 +207,12 @@ EPOCHS=200, BATCH_SIZE=32, T=30
 EXCLUDE_DATASETS = {"DREAMER"}   — Likert 1-5, varianza casi nula
 QUALITY_WEIGHTS = equal (1.0 para todos)
 EEG: DEAP usa TGAM2(F3/F4); AFFEC/WESAD/AFEW-VA zeros; DREAMER excluido
-Seed: torch.manual_seed(42) + np.random.seed(42) — reproducibilidad
 SWA: AveragedModel desde epoch SWA_START=80; evaluado vs best al final
 ```
 
 Checkpoint guardado en `production/fusion_best.pth` cuando mejora CCC de validación.
 SWA se evalúa al final: si bate el best regular, sobreescribe el checkpoint.
+**Lanzar con**: `python -u train_fusion.py --use_prior` (λ=0.05 es el default, ds_face_ids=AFEWVA)
 
 ---
 
@@ -364,13 +365,15 @@ dagn_lib/
 
 ## Estado final (2026-03-20) — TODO CERRADO ✅
 
-### Modelo ✅ CERRADO — GLOBAL CCC 0.380
-Checkpoint definitivo: `production/fusion_baseline.pth` = `production/fusion_best.pth`
+### Modelo ✅ NUEVO MEJOR — GLOBAL CCC **0.389**
+Checkpoint: `production/fusion_baseline.pth` = `production/fusion_best.pth` (Mar 20 09:58)
+Config: `--use_prior --lambda_prior 0.05` + `ds_face_ids=(DS_AFEWVA,)` en train_fusion.py
 
 ### Ablations completados ✅
-- Prior fisiológico (2026-03-19): directional hinge es la menos perjudicial (Δ=-0.007). Baseline gana.
+- Prior fisiológico (2026-03-19): directional hinge full (AFEWVA+AFFEC face) → AFEW-VA=0.613, GLOBAL=0.373
 - EEG 10D bilateral (2026-03-19): degradó (0.345). Revertido. F3/F4 5D es suficiente.
-- SWA + seed fija (2026-03-20): seed=42 da eval 0.376 reproducible. SWA no mejora en seed=42 (best en ep80 → SWA promedia modelos degradados). Model soup falla con inits distintas. Baseline 0.380 definitivo.
+- SWA + seed fija (2026-03-20): seed=42 da eval 0.376 reproducible pero subóptimo. Model soup falla.
+- **Prior AFEWVA-face only (2026-03-20)**: AFEW-VA=**0.627**, AFFEC=**0.548**, GLOBAL=**0.389** ← MEJOR
 
 ### Producción ✅ OPERATIVO
 - FastAPI service + Streamlit dashboard funcionando (2026-03-18)

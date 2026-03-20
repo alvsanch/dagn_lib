@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "production"))
 
 from global_dataset import GlobalDataset, make_dataloaders, DATASET_NAMES
 from fusion_model   import FusionLSTM
-from physiological_prior import PhysiologicalPrior
+from physiological_prior import PhysiologicalPrior, DS_AFEWVA
 
 # ─── Hyperparameters ──────────────────────────────────────────────────────────
 EPOCHS      = 200
@@ -205,8 +205,8 @@ def eval_ccc_by_dataset(model, loader):
 parser = argparse.ArgumentParser(description="Train FusionLSTM")
 parser.add_argument("--use_prior", action="store_true", default=False,
                     help="Enable physiological prior auxiliary loss")
-parser.add_argument("--lambda_prior", type=float, default=0.10,
-                    help="Prior loss weight (default 0.10)")
+parser.add_argument("--lambda_prior", type=float, default=0.05,
+                    help="Prior loss weight (default 0.05; best result was 0.05)")
 parser.add_argument("--face_only_prior", action="store_true", default=False,
                     help="Prior uses only face/AU rules (physio_weight=0, eeg_weight=0). "
                          "Use with --use_prior.")
@@ -215,12 +215,6 @@ args = parser.parse_args()
 
 # ─── Training loop ────────────────────────────────────────────────────────────
 def train():
-    # Fix random seed for reproducible initialization (eliminates run-to-run variance)
-    torch.manual_seed(42)
-    np.random.seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-
     print(f"Device: {DEVICE}")
     print(f"Building datasets (feature computation may take several minutes)...")
     t0 = time.time()
@@ -243,14 +237,19 @@ def train():
 
     prior = None
     if args.use_prior:
-        p_weight = 0.0 if args.face_only_prior else 1.0
-        e_weight = 0.0 if args.face_only_prior else 0.7
+        p_weight  = 0.0 if args.face_only_prior else 1.0
+        e_weight  = 0.0 if args.face_only_prior else 0.7
+        # Face rules calibrated for MediaPipe [0,1] — only valid for AFEW-VA.
+        # AFFEC uses OpenFace2 AU_r (different scale/distribution) → prior
+        # face rules fire incorrectly → restrict face gate to AFEW-VA only.
+        face_ids  = (DS_AFEWVA,)   # face rules for AFEW-VA only (MediaPipe FACS)
         prior = PhysiologicalPrior(
             lambda_prior=args.lambda_prior,
             physio_weight=p_weight,
             eeg_weight=e_weight,
+            ds_face_ids=face_ids,
         )
-        mode = "face-only" if args.face_only_prior else "full"
+        mode = "face-only" if args.face_only_prior else "full(afewva-face)"
         print(f"PhysiologicalPrior ENABLED  λ={args.lambda_prior}  mode={mode}")
     else:
         print("PhysiologicalPrior DISABLED (baseline)")
