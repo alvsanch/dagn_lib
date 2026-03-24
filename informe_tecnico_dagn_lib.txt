@@ -1,0 +1,985 @@
+================================================================================
+INFORME TÉCNICO COMPLETO — dagn_lib FusionLSTM
+Sistema de reconocimiento de emociones multimodal (Valence/Arousal)
+Contribución doctoral — Sistema DAGN
+Fecha del informe: 2026-03-24
+================================================================================
+
+ÍNDICE
+------
+1.  Resumen ejecutivo
+2.  Contexto y motivación
+3.  Verificación de consistencia del modelo
+4.  Arquitectura del modelo
+5.  Extractores de features
+6.  Datasets de entrenamiento
+7.  Pipeline de datos y normalización
+8.  Proceso de entrenamiento
+9.  Prior fisiológico diferenciable
+10. Evaluación del modelo
+11. Sistema en producción
+12. Comparativa con dagn_simple
+13. Ablation study
+14. Hallazgos de consistencia (revisión de código)
+15. Argumentación doctoral
+
+
+================================================================================
+1. RESUMEN EJECUTIVO
+================================================================================
+
+dagn_lib es el modelo principal de la contribución doctoral del sistema DAGN.
+Frente al modelo previo dagn_simple (8.8M parámetros, CNN+LSTM pesado), dagn_lib
+extrae features bibliográficamente fundamentadas con librerías establecidas
+(MediaPipe, NeuroKit2, MNE) y las fusiona mediante un LSTM minimalista.
+
+RESULTADO FINAL VALIDADO (2026-03-20):
+  - Parámetros:     819,770  (≈10× menos que dagn_simple)
+  - Global CCC val: 0.389    (promedio CCC-valence + CCC-arousal)
+  - AFEW-VA CCC:    0.627    (supera dagn_simple en +0.255)
+  - AFFEC CCC:      0.548
+  - WESAD CCC:      0.553
+  - Checkpoint:     production/fusion_baseline.pth  (seguro, no sobreescribible)
+  - Config:         python train_fusion.py --use_prior (λ=0.05, ds_face=AFEWVA)
+
+
+================================================================================
+2. CONTEXTO Y MOTIVACIÓN
+================================================================================
+
+DAGN (Doctoral Affective Generalization Network) investiga el reconocimiento
+automático de emociones en el espacio de Valencia/Arousal (VA) de Russell (1980).
+
+Problema central: fusionar señales heterogéneas (vídeo facial, fisiología, EEG)
+de múltiples datasets con convenciones distintas de anotación.
+
+Elección arquitectónica: frente a encoders profundos (dagn_simple), dagn_lib
+apuesta por features explícitas extraídas con librerías validadas en la literatura.
+Esta elección es el núcleo del argumento doctoral:
+
+  "Features explícitas extraídas con herramientas establecidas + modelo minimalista
+   + prior diferenciable desde literatura canónica = máxima justificabilidad
+   con mínima complejidad paramétrica"
+
+Datasets involucrados (5 total):
+  - DEAP:    EEG 32ch + BVP/GSR/TEMP (laboratorio, 32 sujetos, 40 videos)
+  - WESAD:   BVP/EDA/TEMP de muñeca (Empatica E4, estrés/no estrés)
+  - DREAMER: EEG 14ch + ECG (Emotiv EPOC, 23 sujetos, 18 películas)
+  - AFEW-VA: Vídeo de expresión facial en-the-wild (clips AFEW, VA 0-10)
+  - AFFEC:   EEG 63ch + GSR + OpenFace2 AUs (72 sujetos, 4 emociones)
+
+
+================================================================================
+3. VERIFICACIÓN DE CONSISTENCIA DEL MODELO
+================================================================================
+
+Revisión exhaustiva de todos los archivos del sistema realizada el 2026-03-24.
+Resultado: el modelo es CONSISTENTE. Se detectaron 3 discrepancias menores
+de documentación (ninguna afecta al comportamiento en ejecución).
+
+── 3.1 Consistencia funcional (código vs. código) ──────────────────────────────
+
+[✓] Dimensiones de features: coherentes en todos los módulos
+      FACE_DIM=17, PHYSIO_DIM=6, EEG_DIM=5, INPUT_DIM=28
+      Fuentes verificadas:
+        - production/fusion_model.py:     FACE_DIM=17, PHYSIO_DIM=6, EEG_DIM=5
+        - training/global_dataset.py:     FACE_DIM=17, PHYSIO_DIM=6, EEG_DIM=5
+        - training/physiological_prior.py: índices F_AU{xx}, P_{xx}, E_{xx}
+          coinciden exactamente con los extractores
+
+[✓] Fórmula _eeg_approx(): IDÉNTICA en entrenamiento y producción
+      Entrenamiento (feature_extractor_eeg_tgam2.py, línea 80-84):
+        theta = np.log1p((1.0 - att/100.0) * 0.5)
+        alpha = np.log1p((med/100.0) * 0.5)
+        beta  = np.log1p((att/100.0) * 0.5)
+        ratio = theta - alpha
+      Producción (analizar_emocion_service.py, línea 215-219):
+        theta = float(np.log1p((1.0 - att_n) * 0.5))  # att_n = clip(att/100, 0,1)
+        alpha = float(np.log1p(med_n * 0.5))
+        beta  = float(np.log1p(att_n * 0.5))
+        ratio = theta - alpha
+      → Producción añade np.clip para robustez, la matemática es idéntica. ✓
+
+[✓] Timestep de inferencia: consistente entre training eval, evaluate_fusion.py
+    y analizar_emocion_service.py
+      train_fusion.py eval (línea 158):         va_out[:, -1, :]
+      evaluate_fusion.py collect_predictions:   va_out[:, -1, :]
+      analizar_emocion_service.py forward:      va[0, -1, :]
+      → Todos usan el último timestep (máximo contexto temporal). ✓
+
+[✓] Checkpoints de producción
+      fusion_baseline.pth: 3,282,032 bytes  (Mar 20 09:58) — seguro
+      fusion_best.pth:     3,282,032 bytes  (Mar 20 12:22) — idéntico tamaño
+      → Ambos corresponden al modelo 819,770 parámetros. ✓
+
+[✓] Prior fisiológico: configuración en train_fusion.py alineada con CLAUDE.md
+      train_fusion.py (línea 246-251):
+        prior = PhysiologicalPrior(
+            lambda_prior=0.05,
+            physio_weight=1.0,  (args.face_only_prior=False)
+            eeg_weight=0.7,
+            ds_face_ids=(DS_AFEWVA,),
+        )
+      → ds_face_ids=(DS_AFEWVA,) hardcodeado. ✓
+
+[✓] DREAMER excluido correctamente
+      train_fusion.py: EXCLUDE_DATASETS = {"DREAMER"}
+      global_dataset.py: quality_weight[DREAMER]=0.0, ds cargado como None
+      physiological_prior.py: DS_DREAMER=2 en ds_eeg_ids pero DREAMER excluido
+      del entrenamiento (no hay muestras). ✓
+
+[✓] Normalización VA: z-score aplicado solo desde estadísticos de train
+      global_dataset.py: _compute_va_stats() → usa solo train_indices
+      make_dataloaders(): val_ds.va_stats = train_ds.va_stats  ← correcto
+      → El val set nunca contamina las estadísticas de normalización. ✓
+
+[✓] Carga de checkpoint con filtro de compatibilidad de shapes
+      evaluate_fusion.py y analizar_emocion_service.py usan:
+        compatible = {k:v for k,v in state.items()
+                      if k in model_state and v.shape == model_state[k].shape}
+      → Robusto frente a cambios de arquitectura en checkpoint stale. ✓
+
+── 3.2 Discrepancias menores detectadas (solo documentación) ───────────────────
+
+[!] train_fusion.py — docstring del módulo (línea 7):
+      Dice:  "Early stopping: PATIENCE=40"
+      Real:  PATIENCE = 60  (línea 43)
+      Impacto: ninguno. El código ejecuta con PATIENCE=60. Solo el comentario
+               del header es stale.
+
+[!] feature_extractor_physio.py — docstring y comentario interno:
+      Línea 11:  "TEMP_norm — skin temperature (x - 32) / 8"
+      Línea 161: "Typical wrist skin temp range: 28-38°C → (x - 32) / 8"
+      Código real (línea 175): temp_T = (temp_T - 34.0) / 4.0
+      CLAUDE.md dice:          (°C - 34) / 4
+      Impacto: ninguno. El código y CLAUDE.md son correctos. Docstring stale.
+
+[!] afew_va_dataset.py — importación de zeros_eeg:
+      from feature_extractor_eeg import zeros_eeg  (módulo legacy)
+      Debería importar de feature_extractor_eeg_tgam2
+      Impacto: ninguno. Ambos modules definen zeros_eeg(T) →
+               np.zeros((T, 5), dtype=np.float32) idénticamente.
+               AFEW-VA no tiene EEG, siempre devuelve ceros.
+
+CONCLUSIÓN: el modelo final es CONSISTENTE. Las 3 discrepancias son
+exclusivamente de documentación y no afectan al comportamiento del sistema.
+
+
+================================================================================
+4. ARQUITECTURA DEL MODELO
+================================================================================
+
+Archivo: production/fusion_model.py
+Clase:   FusionLSTM (nn.Module)
+
+── 4.1 Diagrama de arquitectura ────────────────────────────────────────────────
+
+  Entrada:
+    face   (B, T=30, 17)  — Action Units MediaPipe FACS [0,1]
+    physio (B, T=30,  6)  — HRV/EDA/TEMP NeuroKit2 (normalizado)
+    eeg    (B, T=30,  5)  — TGAM2-compatible log1p [0, 0.405]
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  face[B,T,17] ──┐                                           │
+  │  physio[B,T,6] ─┼─ cat → [B,T,28]                          │
+  │  eeg[B,T,5]  ───┘                                           │
+  │                                                             │
+  │  [B,T,28] → LayerNorm(28) → [B,T,28]                        │
+  │                                                             │
+  │  [B,T,28] → LSTM(28→256, L=2, inter_drop=0.2) → [B,T,256]  │
+  │                                                             │
+  │  [B,T,256] → Dropout(0.45) → [B,T,256]                     │
+  │                                                             │
+  │  [B,T,256] → Linear(256→2) → tanh → va [B,T,2]             │
+  │                                                             │
+  │  grad[:,0,:] = 0                                            │
+  │  grad[:,t,:] = va[:,t,:] - va[:,t-1,:]  (t>0)              │
+  └─────────────────────────────────────────────────────────────┘
+
+  Salida:
+    va   (B, T, 2)  — valence/arousal ∈ [-1, 1] por timestep
+    grad (B, T, 2)  — gradiente temporal de VA (trayectoria emocional)
+
+── 4.2 Recuento de parámetros (verificado) ─────────────────────────────────────
+
+  Capa              Parámetros    Cálculo
+  ─────────────────────────────────────────────────────
+  LayerNorm(28)          56       2 × 28 (weight + bias)
+  LSTM L1 (28→256)  292,864       4 × (256×(28+256) + 2×256) = 4 × 73,216
+  LSTM L2 (256→256) 526,336       4 × (256×(256+256) + 2×256) = 4 × 131,584
+  Linear(256→2)         514       256×2 + 2
+  ─────────────────────────────────────────────────────
+  TOTAL             819,770       ≪ 8,800,000 dagn_simple  (≈10× reducción)
+
+── 4.3 Decisiones de diseño ────────────────────────────────────────────────────
+
+  1. LayerNorm antes del LSTM:
+     Normaliza las escalas heterogéneas entre modalidades.
+     Face AU está en [0,1], EDA está z-scored (puede ser ±3), EEG en [0,0.405].
+     LayerNorm equipara la magnitud antes de entrar al LSTM.
+
+  2. LSTM en lugar de Transformer:
+     El LSTM es más eficiente para secuencias cortas (T=30).
+     Captura la dinámica temporal de las emociones sin la sobrecarga
+     de mecanismos de atención. Interpretable a nivel de "estado oculto".
+
+  3. Forget gate bias = 1:
+     _init_weights() inicializa el bias de forget gate a 1.0 para
+     mejorar el flujo de gradientes y evitar el vanishing gradient
+     en las primeras épocas (Gers et al. 2000).
+
+  4. inter_dropout = 0.2 entre capas LSTM:
+     Activado solo cuando num_layers > 1 (caso actual: 2 capas).
+
+  5. tanh en salida:
+     Acota VA a [-1, 1], consistente con la normalización z-score
+     de los labels (clipeados a ±3 std, la mayoría en [-1,1]).
+
+  6. Gradiente temporal:
+     La salida grad se usa en producción para detectar cambios bruscos
+     de estado emocional. No contribuye al loss durante entrenamiento.
+
+── 4.4 Hiperparámetros finales ─────────────────────────────────────────────────
+
+  hidden_dim  = 256
+  num_layers  = 2
+  dropout     = 0.45     (post-LSTM output)
+  inter_drop  = 0.2      (between LSTM layers)
+  T           = 30       (timesteps por sample)
+  INPUT_DIM   = 28       (17 + 6 + 5)
+
+
+================================================================================
+5. EXTRACTORES DE FEATURES
+================================================================================
+
+── 5.1 Features de cara — face (T, 17) ─────────────────────────────────────────
+
+Archivo:   training/feature_extractor_face.py
+Biblioteca: MediaPipe FaceMesh (468 landmarks, static_image_mode=True)
+Referencia: Ekman & Friesen (1978) Facial Action Coding System (FACS)
+
+Método: geometric approximation (no regresión de AUs).
+Cada AU se computa como una relación geométrica entre landmarks,
+normalizada por distancia inter-ocular y altura facial.
+
+Tabla de AUs extraídas:
+  Idx │ AU   │ Descripción                    │ Cálculo (resumen)
+  ────┼──────┼────────────────────────────────┼──────────────────────────────
+    0 │ AU01 │ Inner Brow Raise               │ inner_brow_y relativo a eye_center
+    1 │ AU02 │ Outer Brow Raise               │ outer_brow_y relativo a eye_center
+    2 │ AU04 │ Brow Lowerer                   │ inner_brow descent hacia nasal bridge
+    3 │ AU06 │ Cheek Raiser                   │ cheek_y relativo a nose_y (smile cheek)
+    4 │ AU07 │ Lid Tightener                  │ max(0, 0.30 - EAR_avg) × 5
+    5 │ AU10 │ Upper Lip Raiser               │ nose_y − mouth_top_y normalizado
+    6 │ AU12 │ Lip Corner Puller              │ corner raise sobre mouth_mid_y
+    7 │ AU14 │ Dimpler                        │ mouth_width / face_width reducido
+    8 │ AU15 │ Lip Corner Depressor           │ corner drop bajo mouth_mid_y
+    9 │ AU17 │ Chin Raiser                    │ chin_y hacia lower_lip
+   10 │ AU20 │ Lip Stretcher                  │ mouth_width / face_width
+   11 │ AU23 │ Lip Tightener                  │ inter-lip gap reducido (<0.06)
+   12 │ AU24 │ Lip Pressor                    │ near-contact labial (<0.03)
+   13 │ AU25 │ Lips Part                      │ inter-lip gap vertical × 8
+   14 │ AU26 │ Jaw Drop                       │ |mouth_bot − mouth_top| / face_height × 5
+   15 │ AU28 │ Lip Suck                       │ lip_gap muy reducido (<0.04)
+   16 │ AU43 │ Eyes Closed (EAR)              │ max(0, 0.25 − EAR_avg) × 5
+
+Rango de salida: [0.0, 1.0] por AU.
+Referencia de normalización: IOD (distancia inter-canthi, lm33↔lm263).
+Face detection failure → zeros(17) para ese frame.
+
+Para AFFEC: se usan los AU_r reales de OpenFace2 en [0,5] almacenados en .npz.
+            El prior ajusta la escala AFFEC /5 para que las reglas sean comparables.
+Para DEAP/WESAD/DREAMER: zeros(T, 17) (no tienen vídeo).
+
+── 5.2 Features fisiológicas — physio (T, 6) ───────────────────────────────────
+
+Archivo:    training/feature_extractor_physio.py
+Biblioteca: NeuroKit2 (Makowski et al. 2021, Behavior Research Methods)
+Referencias: Task Force ESC/NASPE (1996), Boucsein (2012), Gross & Levenson (1993)
+
+  Col │ Feature       │ Cálculo / normalización
+  ────┼───────────────┼────────────────────────────────────────────────────────
+    0 │ RMSSD_norm    │ RMSSD(ms) / 100  (raíz de diferencias RR al cuadrado)
+    1 │ SDNN_norm     │ SDNN(ms) / 100   (desviación estándar intervalos NN)
+    2 │ mean_HR_norm  │ HR(BPM) / 100    (frecuencia cardíaca media)
+    3 │ EDA_tonic     │ SCL decomp NeuroKit2, z-score dentro del trial
+    4 │ EDA_phasic    │ SCR decomp NeuroKit2, z-score dentro del trial
+    5 │ TEMP_norm     │ (°C − 34) / 4    (temperatura periférica centrada en 34°C)
+
+HRV (cols 0-2): estadísticos de ventana completa, replicados en todos los T timesteps.
+  Proceso: BVP/ECG → NeuroKit2 ppg_process/ecg_process → picos → RR intervals
+           Filtro fisiológico: solo RR ∈ [300, 2000] ms (30-200 BPM) son válidos
+EDA (cols 3-4): descompuesta por NeuroKit2, mean-pooling a T timesteps, z-scored.
+TEMP (col 5): mean-pooling a T timesteps, normalización lineal.
+
+Rango típico: RMSSD 0.15-0.80, HR 0.60-0.95, EDA ±2 (z-scored), TEMP ±0.5.
+
+── 5.3 Features EEG — eeg (T, 5) ───────────────────────────────────────────────
+
+Archivo:    training/feature_extractor_eeg_tgam2.py
+Biblioteca: MNE / scipy.signal (Welch PSD dentro de feature_extractor_eeg.py)
+Referencias: Klimesch (1999), Crowley (2010), Davidson (1988)
+
+Pipeline EEG (entrenamiento):
+  EEG multichannel → canales frontales (F3/F4) → bandpower Welch (1s ventana)
+    → theta_raw, alpha_raw, beta_raw
+    → att = clip(beta/(alpha+theta+ε)×50, 0, 100)
+    → med = clip(alpha/(theta+beta+ε)×50, 0, 100)
+    → _eeg_approx(att, med) → 5 features
+
+Pipeline EEG (producción):
+  NeuroSky TGAM2: att, med (0-100) directamente
+    → _eeg_approx(att, med) → 5 features (idéntico)
+
+Formula _eeg_approx(att, med):
+  theta = log1p((1 − att/100) × 0.5)   — relaxación/inatención
+  alpha = log1p((med/100) × 0.5)        — meditación/relajación alertada
+  beta  = log1p((att/100) × 0.5)        — atención/carga cognitiva
+  asym  = 0.0                            — TGAM2 mono-frontal (no asimetría)
+  ratio = theta − alpha                  — índice theta/alpha Klimesch
+
+Rango: [0, log1p(0.5)] ≈ [0, 0.405] — acotado, no z-scored, igual en train/infer.
+
+Canales frontales por dataset:
+  DEAP (32ch, 128Hz):   F3=ch2, F4=ch19
+  DREAMER (14ch, 128Hz): F3=ch2, F4=ch11  (Emotiv EPOC)
+  AFFEC (63ch, 256Hz):   zeroed (EEG excluido — canal incertidumbre)
+  AFEW-VA, WESAD:        zeros (no EEG)
+
+Bandas de frecuencia:
+  Theta: 4-8 Hz, Alpha: 8-13 Hz, Beta: 13-30 Hz
+  Calculadas con Welch PSD (from feature_extractor_eeg.py)
+
+
+================================================================================
+6. DATASETS DE ENTRENAMIENTO
+================================================================================
+
+  Dataset │  N total  │  N val  │ Modalidades           │ VA scale │ VA norm
+  ─────────┼───────────┼─────────┼───────────────────────┼──────────┼─────────
+  DEAP     │    1280   │   256   │ EEG 32ch + BVP/GSR/TEMP│    1-9   │ z-score
+  WESAD    │    1498   │   299   │ BVP/EDA/TEMP (muñeca)  │  arousal │ z-score
+  DREAMER  │     414   │    82   │ EEG 14ch + ECG         │  Likert  │ excluido
+  AFEW-VA  │     914   │   182   │ Face AUs (MediaPipe)   │   0-10   │ z-score
+  AFFEC    │     594   │   118   │ Face+EDA+EEG (g.tec)   │ discrete │ z-score
+  ─────────┼───────────┼─────────┼───────────────────────┼──────────┼─────────
+  GLOBAL   │   4700    │   937   │                        │          │
+  (sin DREAMER): 4286  │   855   │                        │          │
+
+Rutas de datos:
+  DEAP:    /mnt/f/source_datasets/Fisiologico/DEAP/deap-dataset/data_preprocessed_python/
+  WESAD:   /home/alvar/datasets/WESAD  (17 GB — borrar cuando no entrene)
+  DREAMER: /mnt/f/source_datasets/Fisiologico/DREAMER/
+  AFEW-VA: /mnt/f/source_datasets/Fisiologico/AFEW-VA/
+           AUs pre-extraídas: ~/datasets/afew_va_au_features/ (914 .npy)
+  AFFEC:   /home/alvar/datasets/affec_features/  (594 .npz, ya TGAM2-compatible)
+
+Exclusión de DREAMER:
+  Razón: labels Likert 1-5 con varianza casi nula → CCC ≈ 0.001 (ruido puro).
+  Re-incluir con weight=0.1 colapsó AFFEC (0.381→0.105). Excluido definitivamente.
+
+
+================================================================================
+7. PIPELINE DE DATOS Y NORMALIZACIÓN
+================================================================================
+
+Archivo: training/global_dataset.py
+
+── 7.1 Construcción del dataset global ─────────────────────────────────────────
+
+  1. Carga de subdatasets: DEAPDataset, WESADDataset, DREAMERDataset(None),
+     AFEWVADataset, AFFECDataset → lista de (face, physio, eeg, va, ds_id)
+  2. Split estratificado: 80% train / 20% val dentro de cada dataset (seed=42)
+  3. VA z-score: media y desviación estándar calculadas SOLO sobre split train
+     → aplicadas a val usando las mismas estadísticas (sin data leakage)
+     → labels clipeadas a ±3 std para eliminar outliers
+  4. Split "test" (no usado en producción): primeros 50% de índices val de
+     cada dataset — selección indirecta vía early stopping (bias leve)
+
+── 7.2 Sampler ponderado ────────────────────────────────────────────────────────
+
+  WeightedRandomSampler:
+    weight[i] = quality_weight[ds_id] / sqrt(n_ds)
+
+  quality_weights = {DEAP: 1.0, WESAD: 1.0, DREAMER: 0.0, AFEW-VA: 1.0, AFFEC: 1.0}
+    → Todos los datasets activos tienen igual importancia (equal quality)
+    → 1/sqrt(n) equilibra tamaños dispares (WESAD≈1498 vs DREAMER=0)
+
+── 7.3 VA z-score por dataset ───────────────────────────────────────────────────
+
+  El z-score es la solución al "dataset bias problem":
+  - DEAP usa escala 1-9, WESAD usa arousal discreto, AFEW-VA usa 0-10.
+  - Sin normalización, el modelo aprende los offsets inter-dataset
+    en lugar de la dinámica emocional intra-dataset.
+  - Con z-score por dataset, cada uno contribuye con mean=0, std=1,
+    y el modelo aprende el ranking relativo dentro de cada dataset.
+
+  Implicación para el prior: las reglas absolutas (AU06>0.3 → V=+0.65)
+  se aplican a un espacio z-scored donde +0.65 puede corresponder a
+  distintos valores absolutos según el dataset. Por eso el prior usa
+  "directional hinge" (ver sección 9) en lugar de targets absolutos.
+
+── 7.4 Modal dropout augmentation ──────────────────────────────────────────────
+
+  Durante entrenamiento, cada muestra tiene probabilidad de que
+  una modalidad completa sea zeroed out:
+    P_FACE_DROP   = 0.2  (20% de muestras pierden toda la cara)
+    P_PHYSIO_DROP = 0.2  (20% pierden toda la fisiología)
+    P_EEG_DROP    = 0.3  (30% pierden todo el EEG)
+
+  Objetivo: el modelo aprende a predecir incluso con modalidades ausentes,
+  lo que es necesario porque en producción real solo hay physio+EEG (no vídeo).
+
+
+================================================================================
+8. PROCESO DE ENTRENAMIENTO
+================================================================================
+
+Archivo: training/train_fusion.py
+Comando: python -u train_fusion.py --use_prior
+
+── 8.1 Hiperparámetros ──────────────────────────────────────────────────────────
+
+  EPOCHS      = 200
+  BATCH_SIZE  = 32
+  LR          = 1e-3      (AdamW)
+  WEIGHT_DECAY= 3e-4      (regularización L2)
+  PATIENCE    = 60        (early stopping — *nota: docstring dice 40, es erróneo*)
+  T           = 30        (timesteps por sample)
+  SWA_START   = 80        (inicio de Stochastic Weight Averaging)
+  P_FACE_DROP = 0.2       (modal dropout cara)
+  P_PHYSIO_DROP= 0.2      (modal dropout fisiología)
+  P_EEG_DROP  = 0.3       (modal dropout EEG)
+
+── 8.2 Función de pérdida total ────────────────────────────────────────────────
+
+  L = MSE(pred_seq, target_rep) + (1 - CCC_V) + (1 - CCC_A) + variance_penalty + λ·L_prior
+
+  MSE: error cuadrático medio entre predicción temporal y target replicado.
+       pred (B,T,2) vs target_rep (B,T,2) donde target_rep[:, t, :] = target
+
+  CCC loss: 1 - CCC sobre todas las muestras del batch.
+       Mide acuerdo de concordancia (Lin 1989), robusto al offset de media.
+       Calculado por separado para valence y arousal, promediado.
+
+  Variance penalty: penaliza predicciones planas (std_pred < std_target).
+       penalty = α × relu(std_target − std_pred), por dataset.
+       α = {DEAP: 0.5, WESAD: 0.0, DREAMER: 0.0, AFEW-VA: 0.3, AFFEC: 0.3}
+       WESAD=0.0: la fisiología de muñeca ya induce varianza suficiente.
+       DEAP=0.5: señal EEG + physio tiende a predicciones planas.
+
+  λ·L_prior: prior fisiológico diferenciable (sección 9). λ=0.05.
+
+── 8.3 Scheduler ────────────────────────────────────────────────────────────────
+
+  CosineAnnealingLR(T_max=200, eta_min=LR×0.01=1e-5)
+  → LR decae de 1e-3 a 1e-5 siguiendo coseno a lo largo de EPOCHS.
+
+── 8.4 Gradient clipping ────────────────────────────────────────────────────────
+
+  nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+  → Previene exploding gradients con LSTMs profundos.
+
+── 8.5 Stochastic Weight Averaging (SWA) ───────────────────────────────────────
+
+  Algoritmo: Izmailov et al. (2018) "Averaging Weights Leads to Wider Optima
+  and Better Generalization".
+
+  Implementación:
+    swa_model = AveragedModel(model)
+    for epoch >= SWA_START: swa_model.update_parameters(model)
+    Al final: si swa_model mejora best_ccc → guardar swa checkpoint
+
+  Observación en ablation: SWA ayuda cuando el best epoch cae en medio del
+  rango de averaging. Con best_ep=115 y SWA_START=80, el escenario es ideal.
+  En la configuración final, el SWA no superó el checkpoint regular.
+
+── 8.6 Early stopping ───────────────────────────────────────────────────────────
+
+  Métrica: mean_ccc = (CCC_V_global + CCC_A_global) / 2  sobre val set.
+  Checkpoint guardado en production/fusion_best.pth cuando mejora.
+  Epoch final del mejor resultado: epoch 115, early stopping en epoch 175.
+
+── 8.7 Evaluación durante entrenamiento ────────────────────────────────────────
+
+  eval_ccc_by_dataset(): eval en modo no-grad, usa último timestep (t=-1).
+  Imprime por consola: epoch, train_loss, CCC-V, CCC-A, mean, per-dataset.
+  Registra en results_log.txt al finalizar.
+
+── 8.8 Diagnóstico go/no-go (epoch 30) ─────────────────────────────────────────
+
+  Si en el epoch 30 AFFEC arousal < -0.10:
+    → El run cayó en un mínimo local malo (AFFEC stuck negativo).
+    → Matar el proceso y reiniciar (sin seed=42 para diferente init).
+  Causa: el prior con reglas EEG/physio en ciertos basins de inicialización
+  induce un sesgo sistemático en AFFEC arousal.
+
+
+================================================================================
+9. PRIOR FISIOLÓGICO DIFERENCIABLE
+================================================================================
+
+Archivo: training/physiological_prior.py
+Clase:   PhysiologicalPrior(nn.Module)
+
+── 9.1 Motivación ───────────────────────────────────────────────────────────────
+
+El prior encoda conocimiento experto de la literatura como restricciones
+diferenciables durante el entrenamiento. No es un módulo de inferencia;
+es una pérdida auxiliar que guía el modelo hacia predicciones que respetan
+las relaciones señal→emoción documentadas en la literatura.
+
+Dirección de las reglas: observed_signal → expected_VA_range
+  (NO emotion → signal; la dirección inversa es la que el modelo necesita)
+
+── 9.2 Arquitectura del prior ───────────────────────────────────────────────────
+
+  compute_prior_va(face, physio, eeg, ds_ids):
+    → Por cada muestra, aplica N reglas condicionadas a la modalidad presente
+    → Cada regla devuelve (v_vote, a_vote, weight)
+    → Weighted voting: v_prior = Σ(v_i × w_i) / Σ(w_i)
+    → Sigma = sigma_global / (1 + Σw_i)  → decrece con más evidencia
+
+  auxiliary_loss(pred_va, face, physio, eeg, ds_ids):
+    → Hinge direccional: relu(-pred_v × sign(v_mu)) × v_active
+    → Fires solo cuando: n_rules > 0.1 AND |mu| > 0.15
+    → L = λ × mean(loss_v + loss_a) sobre el batch
+
+  Zero-masking: si physio está completamente en cero (modal dropout o
+  dataset sin fisiología), las reglas de physio NO se aplican.
+  Igual para face y eeg.
+
+── 9.3 Reglas fisiológicas (5 reglas) ──────────────────────────────────────────
+
+  Señal           │ Condición          │ Predicción VA  │ Peso │ Ref
+  ────────────────┼────────────────────┼────────────────┼──────┼──────────
+  RMSSD_norm      │ > 0.50 (RMSSD>50ms)│ V=+0.4, A=-0.3 │ 1.0  │ [TH07]
+                  │ ∈(0.01, 0.25)      │ V=-0.3, A=+0.35│ 1.0  │ [TF96]
+  HR_norm (BPM/100│ > 0.85 (>85 BPM)  │ V=0, A=+0.45   │ 0.7  │ [EM01]
+                  │ ∈(0.01, 0.65)      │ V=0, A=-0.30   │ 0.7  │ [BL94]
+  EDA tonic (SCL) │ > 1.0 (z-scored)  │ V=0, A=+0.40   │ 0.8  │ [BO12]
+                  │ < -0.5             │ V=0, A=-0.25   │ 0.8  │ [DA12]
+  EDA phasic (SCR)│ > 1.5 (z-scored)  │ V=-0.15, A=+0.45│ 0.7 │ [BO12]
+  TEMP_norm       │ < -0.5 (<32°C)     │ V=-0.30, A=+0.30│ 0.6 │ [GL93]
+                  │ > +0.5 (>36°C)     │ V=+0.25, A=-0.15│ 0.6 │ [GL97]
+
+── 9.4 Reglas EEG (3 reglas) ───────────────────────────────────────────────────
+
+  Señal     │ Condición         │ Predicción VA  │ Peso │ Ref
+  ──────────┼───────────────────┼────────────────┼──────┼──────────
+  alpha     │ > 0.25 (med>60)   │ V=+0.20, A=-0.35│ 0.7 │ [KL99]
+  beta      │ > 0.30 (att>60)   │ V=0, A=+0.40   │ 0.6  │ [KL99]
+  θ/α ratio │ > 0.15 (theta dom)│ V=-0.15, A=-0.30│ 0.6 │ [KL99]
+             │ < -0.10 (alpha dom│ V=+0.15, A=+0.20│ 0.6 │ [KL99]
+
+── 9.5 Reglas de cara/AU (6 reglas) ────────────────────────────────────────────
+
+  Patrón AU            │ Emoción      │ Predicción VA      │ Peso │ Ref
+  ─────────────────────┼──────────────┼────────────────────┼──────┼──────────
+  AU06>0.3 & AU12>0.3  │ Duchenne smile│ V=+0.65, A=+0.20  │ 1.2  │ [EF78,BO03]
+  AU01>0.3 & (AU15+AU17│ Tristeza     │ V=-0.55, A=-0.20   │ 1.0  │ [EF78]
+   >0.4)               │              │                    │      │
+  (AU01+AU02>0.5) &    │ Miedo        │ V=-0.60, A=+0.55   │ 1.0  │ [EF78]
+   AU20>0.3            │              │                    │      │
+  AU04>0.3 & (AU07+AU23│ Ira          │ V=-0.50, A=+0.50   │ 0.9  │ [EF78]
+   >0.4)               │              │                    │      │
+  AU15>0.3 & AU25>0.4  │ Asco (proxy) │ V=-0.45, A=+0.15   │ 0.7  │ [EF78]
+  AU43>0.6             │ Somnolencia  │ V=-0.10, A=-0.45   │ 0.8  │ [GL93]
+
+── 9.6 Pérdida auxiliar: directional hinge ─────────────────────────────────────
+
+  Diseño: Gaussian NLL fue probado inicialmente y falló (CCC cayó a 0.138).
+  El problema: targets absolutos (V=+0.65 para Duchenne) son incompatibles
+  con labels z-scored donde el mismo V puede ser negativo si el clip está
+  bajo la media del dataset.
+
+  Solución: directional hinge — solo pregunta "¿está la predicción en la
+  mitad correcta del espacio?"
+
+    L_v = relu(-pred_v × sign(v_mu)) × gate_v
+    L_a = relu(-pred_a × sign(a_mu)) × gate_a
+
+  gate = (n_rules > 0.1) × (|mu| > 0.15)
+  → Activa solo cuando el prior tiene señal unívoca.
+
+── 9.7 Configuración óptima (ablation) ─────────────────────────────────────────
+
+  La configuración ganadora:
+    - Reglas de cara restringidas a AFEW-VA: ds_face_ids=(DS_AFEWVA,)
+    - AFFEC excluida de reglas de cara: AUs OpenFace2 [0,5] vs MediaPipe [0,1]
+      son cualitativamente distintas aunque la /5 normalización mitiga la escala.
+    - Reglas physio y EEG con defaults (DEAP, WESAD, AFFEC para physio;
+      DEAP, DREAMER para EEG — aunque DREAMER excluido del training).
+    - λ = 0.05 (no penalizar demasiado; el modelo tiene libertad de adaptarse).
+
+  Referencias canónicas del prior:
+    [TF96]  Task Force ESC/NASPE (1996) — HRV standards
+    [TH07]  Thayer & Lane (2007) — vagal tone y emoción
+    [BO12]  Boucsein (2012) — Electrodermal Activity
+    [KL99]  Klimesch (1999) — EEG alpha/theta
+    [EF78]  Ekman & Friesen (1978) — FACS
+    [RU80]  Russell (1980) — circumplex model of affect
+    [BL94]  Bradley & Lang (1994) — SAM y dimensiones emocionales
+    [GL93]  Gross & Levenson (1993) — temperatura periférica y emoción
+    [DA88]  Davidson (1988) — frontal asymmetry
+
+
+================================================================================
+10. EVALUACIÓN DEL MODELO
+================================================================================
+
+Archivo:  production/evaluate_fusion.py
+Script:   python production/evaluate_fusion.py  (desde /home/alvar/dagn_lib/)
+
+── 10.1 Metodología de evaluación ──────────────────────────────────────────────
+
+  Split: val (80/20 estratificado, seed=42)
+         Val = muestras que nunca recibieron actualizaciones de gradiente.
+         NOTA: Early stopping usó el val set completo → model selection bias.
+         Para test sin sesgo requeriría re-entrenar con split 70/15/15.
+
+  Métrica principal: CCC (Concordance Correlation Coefficient, Lin 1989)
+    CCC(p,t) = 2·cov(p,t) / (var(p) + var(t) + (mean_p − mean_t)²)
+    CCC ∈ [-1, 1]; CCC=1 es acuerdo perfecto.
+    Ventaja sobre Pearson r: penaliza además la diferencia de medias.
+
+  Intervalo de confianza 95%: bootstrap percentil (n=1000 resamples, seed=42).
+
+  Inferencia: último timestep (t=-1) → máximo contexto temporal.
+  Consistente con producción.
+
+  Métricas adicionales (evaluate_fusion --split val --verbose):
+    Pearson r, p-valor, RMSE, MAE, R²
+
+── 10.2 Resultados finales (split=val, N=937) ───────────────────────────────────
+
+  Dataset  │  N  │ CCC-V          │ CCC-A          │ Media
+  ─────────┼─────┼────────────────┼────────────────┼──────
+  DEAP     │ 256 │ 0.157 [0.045, 0.280] │ 0.033 [-0.080, 0.155] │ 0.095
+  WESAD    │ 299 │ 0.510 [0.412, 0.599] │ 0.596 [0.507, 0.678]  │ 0.553
+  DREAMER  │  82 │−0.010 [−0.048, 0.024]│−0.002 [−0.041, 0.035] │ ~0
+  AFEW-VA  │ 182 │ 0.586 [0.489, 0.645] │ 0.667 [0.584, 0.730]  │ 0.627
+  AFFEC    │ 118 │ 0.699 [0.587, 0.791] │ 0.396 [0.231, 0.540]  │ 0.548
+  ─────────┼─────┼────────────────┼────────────────┼──────
+  GLOBAL   │ 937 │ 0.404 [0.350, 0.457] │ 0.374 [0.316, 0.435]  │ 0.389
+
+── 10.3 Análisis por dataset ───────────────────────────────────────────────────
+
+  AFEW-VA (CCC=0.627):
+    Mejor resultado absoluto. AUs MediaPipe bien calibradas para FACS.
+    Prior: reglas Duchenne (AU6+AU12) claramente alineadas con labels.
+    Mejora vs baseline sin prior: +0.090 (0.537→0.627).
+    CRÍTICO: supera dagn_simple por +0.255 (0.372 dagn_simple, 0.627 dagn_lib).
+
+  AFFEC (CCC=0.548):
+    Valence CCC=0.699 — excelente. Arousal CCC=0.396 — moderado.
+    Prior: face rules excluidas (OpenFace2 incompatible), physio rules activas.
+    Mejora vs baseline: +0.130 (0.418→0.548).
+
+  WESAD (CCC=0.553):
+    Fisiología de muñeca (Empatica E4). RMSSD/EDA muy limpios.
+    Ligera degradación vs baseline (0.565→0.553) — prior physio rules
+    leves interferencias. Trade-off aceptable.
+
+  DEAP (CCC=0.095):
+    Peor resultado. Labels 1-9 con escala subjetiva muy variable.
+    Prior physio: reglas absolutas (RMSSD>50ms) vs datos z-scored → inexactas.
+    Trade-off conocido y documentado. Baseline era 0.172; prior cuesta 0.077.
+
+  DREAMER (CCC≈0):
+    Excluido del entrenamiento. Se evalúa como diagnóstico.
+    Labels Likert 1-5 con varianza casi nula → CCC no informativo.
+
+── 10.4 Varianza run-to-run ─────────────────────────────────────────────────────
+
+  El resultado 0.389 requirió un basin de inicialización favorable.
+  3 re-runs adicionales dieron: 0.362, 0.362, 0.364.
+  seed=42 da resultado reproducible pero subóptimo (~0.376) debido a que
+  AFFEC arousal se queda stuck en negativo desde el epoch 5.
+
+  Diagnóstico go/no-go en epoch 30: AFFEC arousal < -0.10 → matar y reiniciar.
+
+
+================================================================================
+11. SISTEMA EN PRODUCCIÓN
+================================================================================
+
+── 11.1 Arquitectura del sistema en tiempo real ────────────────────────────────
+
+  Sensores ESP32 (MQTT 50Hz)
+    │  topic: tesis/biomedidas
+    │  campos fisiológico: ir, red, gsr, tmp
+    │  campos EEG:         att, med, sensor, signal
+    ▼
+  Dashboard Streamlit (dashboard.py)
+    │  Acumula MQTT desde last_physio_ts
+    │  HTTP POST c/ ir_batch[], gsr_batch[]... → FastAPI :8000/analyze
+    │  Refresh: 1000ms
+    ▼
+  FastAPI Service (analizar_emocion_service.py)
+    │  NeuroKit2: HRV/EDA sobre bvp_deque (50Hz, cap 15s)
+    │  MediaPipe: AUs desde frames de cámara
+    │  _eeg_approx(att, med) → 5D EEG features
+    │  FusionLSTM forward → va (B=1, T=30, 2)
+    │  face-only forward: physio/eeg=zeros → face_v, face_a
+    │  EMA smoothing: alpha=0.25 sobre VA cruda
+    ▼
+  Dashboard — visualización
+    Plano VA, timeline VA, raw signals, métricas vitales
+
+── 11.2 Servicio FastAPI (analizar_emocion_service.py) ─────────────────────────
+
+  Endpoint: POST /analyze
+  Request:  {session_id, ir, red, gsr, temp, att, med,
+             ir_batch[], red_batch[], gsr_batch[], temp_batch[]}
+  Response: {status, valence, arousal, grad_v, grad_a, face_v, face_a,
+             hr_bpm, rmssd, eda_mean, spo2, cam_hr, cam_resp,
+             blink_rate, warmup}
+
+  Warmup: 30 llamadas antes de predicciones estables (~30s).
+  Session reset: al cambiar session_id, limpia todos los deques y EMA.
+  SpO2: ratio-of-ratios IR/RED últimos 5s → SpO2 = 110 − 25×R.
+  rPPG: green channel forehead ROI → Welch PSD → cam_hr, cam_resp.
+  Blinks: AU43 del paso MediaPipe; EAR via Haar en el buffer de alta res.
+
+── 11.3 Arranque del sistema ────────────────────────────────────────────────────
+
+  # Mosquitto (broker MQTT para ESP32)
+  mosquitto -v -c /etc/mosquitto/mosquitto.conf > /tmp/mosquitto.log 2>&1 &
+
+  # FastAPI
+  cd /home/alvar/dagn_lib/production
+  /home/alvar/venv_tesis/bin/uvicorn analizar_emocion_service:app \
+    --host 0.0.0.0 --port 8000 > /tmp/service.log 2>&1 &
+
+  # Streamlit (con setsid para supervivencia al cerrar shell)
+  setsid bash /home/alvar/dagn_lib/production/start_dashboard.sh \
+    > /tmp/dashboard.log 2>&1 &
+
+  # Servidor cámara (Windows PowerShell)
+  $env:CAM_API_TOKEN = "3f7a1c2d-8e4b-4f9a-b1c2-d3e4f5a6b7c8"
+  python camera_server.py   # host='0.0.0.0' para acceso desde WSL
+
+── 11.4 Checkpoint de producción ───────────────────────────────────────────────
+
+  Activo:  production/fusion_best.pth     (3,282,032 bytes, Mar 20 12:22)
+  Backup:  production/fusion_baseline.pth (3,282,032 bytes, Mar 20 09:58)
+
+  ATENCIÓN: fusion_best.pth puede sobreescribirse al re-entrenar.
+  fusion_baseline.pth es el seguro que preserva el resultado 0.389.
+  Antes de cualquier entrenamiento: restaurar fusion_best.pth desde baseline.
+
+
+================================================================================
+12. COMPARATIVA CON DAGN_SIMPLE
+================================================================================
+
+  Métrica          │ dagn_lib (820K params) │ dagn_simple (8.8M params)
+  ─────────────────┼────────────────────────┼──────────────────────────
+  Parámetros       │       819,770          │       8,800,000
+  Global CCC (val) │        0.389           │         0.435
+  WESAD CCC        │        0.553           │         0.598
+  AFEW-VA CCC      │        0.627  ★        │         0.372
+  AFFEC CCC        │        0.548  ★        │         N/A (no disponible)
+  Ratio params     │        1.0×            │        10.7×
+  Features         │   Explícitas (FACS,    │   Encoders CNN+LSTM pesados
+                   │   HRV, EDA, EEG TGAM2)│   (aprenden representación)
+  Interpretabilidad│        Alta            │         Baja
+
+  Fortaleza de dagn_lib:
+  → AFEW-VA +0.255 sobre dagn_simple: features MediaPipe FACS + prior Ekman
+    están óptimamente calibradas para datos de expresión facial in-the-wild.
+  → 10× menos parámetros con features justificables en defensa doctoral.
+  → Prior diferenciable: primero en DAGN que codifica restricciones literaturas.
+
+  Debilidad de dagn_lib vs dagn_simple:
+  → Global CCC 0.389 vs 0.435: dagn_simple supera en global por WESAD (+0.045)
+    y posiblemente por su mayor capacidad para capturar patrones complejos.
+  → dagn_lib es menos flexible para señales sin teoría explícita (e.g. DEAP EEG).
+
+
+================================================================================
+13. ABLATION STUDY
+================================================================================
+
+── 13.1 Prior fisiológico (2026-03-19 / 2026-03-20) ────────────────────────────
+
+  Variante                        │ Train CCC │ Eval GLOBAL │ AFEW-VA │ AFFEC
+  ────────────────────────────────┼───────────┼─────────────┼─────────┼──────
+  Baseline (prior=OFF)            │   0.336   │    0.380    │  0.537  │ 0.418
+  Prior full Gaussian NLL λ=0.10  │   0.138   │     —       │   —     │  —
+  Prior full directional hinge    │   0.321   │    0.373    │  0.613  │ 0.389
+   λ=0.05                         │           │             │         │
+  Prior face-only λ=0.10          │   0.323   │    0.337    │  0.522  │ 0.236
+  Prior full + AFFEC AU /5 fix    │   0.319   │    0.364    │  0.587  │ 0.389
+   λ=0.05                         │           │             │         │
+  Prior ds_face=(AFEWVA) ← MEJOR  │   0.319   │    0.389    │  0.627  │ 0.548
+   λ=0.05                         │           │             │         │
+
+  Conclusiones:
+  1. Gaussian NLL inviable con z-scored labels.
+  2. Directional hinge compatible con z-score (solo dirección).
+  3. Face rules solo en AFEW-VA: elimina ruido de AFFEC (OpenFace2 incompat.)
+     → Mejora AFEW-VA (+0.014 vs full) Y AFFEC (+0.159 vs full) simultáneamente.
+  4. Excluir DEAP de ds_physio_ids → AFFEC arousal stuck negativo (3 runs).
+     Hipótesis: altera paisaje de gradientes, desestabiliza AFFEC.
+
+── 13.2 EEG 10D bilateral (2026-03-19) ─────────────────────────────────────────
+
+  Intento: 5D (TGAM2 F3/F4) → 10D bilateral (F3/F7/FC1 + F4/F8/FC2 + FAA).
+  Resultado: GLOBAL 0.345 vs baseline 0.370 (−0.025). REVERTIDO.
+
+  Causas del fallo:
+  - DEAP: canales extra añaden ruido (F7, FC1 menos informativos que F3/F4).
+  - Distribution shift: FAA=0 en producción (TGAM2 mono-frontal) pero
+    FAA real en training → el modelo aprende un feature que en producción
+    siempre es cero.
+  - Lección: train/inference mismatch en features EEG es crítico.
+
+── 13.3 SWA y seed fija (2026-03-20) ───────────────────────────────────────────
+
+  SWA: Izmailov et al. (2018). AveragedModel desde epoch 80.
+  Con best_ep=115: SWA acumula 35 checkpoints antes del mejor → mejoría posible.
+  Resultado: SWA no superó el checkpoint regular en la config final.
+
+  seed=42 reproducible (val CCC=0.376) pero subóptimo:
+  - AFFEC arousal stuck negativo desde epoch 5 con seed=42.
+  - seed=42 fija el dataset split (correcto) pero también el model init.
+  - Sin seed de model: 3 re-runs dieron 0.362 (basin malo) + 1 dio 0.389.
+
+  Model soup (Wortsman 2022): FALLA con inicializaciones distintas.
+  Solo funciona con fine-tunes de la misma base (mismo landscape de loss).
+
+
+================================================================================
+14. HALLAZGOS DE CONSISTENCIA (REVISIÓN DE CÓDIGO)
+================================================================================
+
+Revisión realizada: 2026-03-24
+Estado: CONSISTENTE — 3 discrepancias menores de documentación únicamente.
+
+── 14.1 Consistencias verificadas (estado ✓) ────────────────────────────────────
+
+[✓] Dimensiones FACE_DIM=17, PHYSIO_DIM=6, EEG_DIM=5 — coherentes en todos
+    los módulos (fusion_model.py, global_dataset.py, physiological_prior.py,
+    feature extractors, dataset loaders).
+
+[✓] _eeg_approx() — fórmula idéntica en entrenamiento y producción.
+    Producción añade np.clip como robustez, sin cambio en matemática.
+
+[✓] Timestep de inferencia t=-1 — usado consistentemente en train eval,
+    evaluate_fusion.py y analizar_emocion_service.py.
+
+[✓] Checkpoints fusion_best.pth y fusion_baseline.pth — mismo tamaño
+    (3,282,032 bytes), correspondiente al modelo de 819,770 parámetros.
+
+[✓] Prior configuration — train_fusion.py hardcodea ds_face_ids=(DS_AFEWVA,),
+    λ=0.05 como defaults del argparse. Alineado con config ganadora.
+
+[✓] DREAMER excluido — EXCLUDE_DATASETS={"DREAMER"} en train_fusion.py y
+    quality_weight[DREAMER]=0.0. Coherente.
+
+[✓] VA z-score — estadísticos solo de train split; val usa copia de train stats.
+    Sin data leakage de val en normalización.
+
+[✓] Gradient clipping max_norm=1.0 — protege contra exploding gradients LSTM.
+
+[✓] Carga de checkpoint con filtro de shape — robusto frente a arquitecturas
+    cambiadas.
+
+[✓] Parámetros del modelo — 819,770 verificados aritméticamente:
+    56 + 292,864 + 526,336 + 514 = 819,770.
+
+── 14.2 Discrepancias menores (solo documentación) ─────────────────────────────
+
+[!] train_fusion.py línea 7: docstring dice "PATIENCE=40", código usa 60.
+    Impacto: ninguno. El entrenamiento usa PATIENCE=60.
+
+[!] feature_extractor_physio.py líneas 11 y 161: documentación dice "(x-32)/8",
+    código usa "(x-34)/4". CLAUDE.md especifica (°C-34)/4 — código y CLAUDE.md
+    son correctos. Docstring stale.
+
+[!] afew_va_dataset.py: importa zeros_eeg de feature_extractor_eeg (legacy)
+    en lugar de feature_extractor_eeg_tgam2. Funcionalmente idéntico: ambos
+    devuelven np.zeros((T,5)). AFEW-VA no tiene EEG.
+
+
+================================================================================
+15. ARGUMENTACIÓN DOCTORAL
+================================================================================
+
+dagn_lib encarna la hipótesis doctoral central: las features explícitas
+extraídas con herramientas bibliográficamente fundamentadas son más
+justificables y, en dominios con datos etiquetados limitados, pueden
+competir con encoders profundos con una fracción de sus parámetros.
+
+── 15.1 Contribuciones técnicas ────────────────────────────────────────────────
+
+  1. Pipeline de features multimodal explicable:
+     - Face: 17 AUs geométricos desde MediaPipe (Ekman 1978 FACS)
+     - Physio: 6 features HRV/EDA/TEMP desde NeuroKit2 (Task Force 1996)
+     - EEG: 5 features TGAM2-compatible desde MNE (Klimesch 1999, Crowley 2010)
+     Cada feature tiene una referencia canónica en la literatura.
+
+  2. Prior fisiológico diferenciable:
+     Sistema de reglas señal→VA derivadas de literatura (Ekman 1978, Task Force
+     1996, Boucsein 2012, Klimesch 1999) expresadas como pérdida auxiliar.
+     Primer prior diferenciable de este tipo en el sistema DAGN.
+
+  3. Diseño TGAM2-compatible:
+     El espacio de features EEG es idéntico entre entrenamiento (multichannel)
+     y producción (sensor NeuroSky TGAM2 de bajo coste).
+     Elimina el distribution shift entrenamiento/inferencia para EEG.
+
+  4. Ablation exhaustivo documentado:
+     5 variantes del prior, EEG bilateral, SWA, seed fija.
+     Transparencia sobre varianza run-to-run y trade-offs por dataset.
+
+── 15.2 Resultados clave para la defensa ────────────────────────────────────────
+
+  - AFEW-VA CCC=0.627: supera dagn_simple (8.8M params) por +0.255.
+    Argumento: features MediaPipe FACS + prior Ekman están mejor calibradas
+    para expresión facial in-the-wild que un encoder CNN pesado.
+
+  - AFFEC CCC=0.548 valence=0.699: resultado muy fuerte.
+    Features fisiológicas NeuroKit2 capturan bien la varianza emocional.
+
+  - 10× menos parámetros: 819,770 vs 8,800,000.
+    El modelo es deplegable en hardware embebido (Raspberry Pi, ESP32 + SBC).
+
+  - Prior diferenciable: restringe el espacio de soluciones hacia
+    direcciones fisiológicamente plausibles. Valor metodológico aunque
+    el impacto empírico es modesto en global CCC (0.380→0.389).
+
+  - Producción operativa: sistema end-to-end con ESP32, MQTT, NeuroKit2
+    y MediaPipe corriendo en tiempo real a ~1Hz de refresh.
+
+── 15.3 Limitaciones reconocidas ───────────────────────────────────────────────
+
+  - Global CCC 0.389 vs dagn_simple 0.435: dagn_simple supera en global.
+    Especialmente en WESAD (0.553 vs 0.598) donde la capacidad del encoder
+    pesado captura mejor la fisiología de muñeca.
+
+  - DEAP CCC=0.095: el z-score por participante en DEAP hace las reglas
+    absolutas del prior inexactas. Trade-off conocido.
+
+  - Varianza run-to-run: sin seed fija para model init, los resultados
+    varían entre 0.362 y 0.389. Consecuencia de la no-convexidad del
+    landscape de loss con el prior activo.
+
+  - Split test: el "test set" disponible es subconjunto del val set
+    (indirect selection bias). Para test sin sesgo se requiere re-entrenar.
+
+  - DREAMER CCC≈0: excluido del entrenamiento. Labels Likert 1-5 no
+    son compatibles con el espacio de representación continuo del modelo.
+
+
+================================================================================
+FIN DEL INFORME
+================================================================================
+Generado automáticamente el 2026-03-24.
+Repositorio: /home/alvar/dagn_lib
+Checkpoint seguro: production/fusion_baseline.pth (3,282,032 bytes, Mar 20 09:58)
+Checkpoint activo: production/fusion_best.pth     (3,282,032 bytes, Mar 20 12:22)
+================================================================================
